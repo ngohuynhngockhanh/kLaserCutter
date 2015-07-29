@@ -83,7 +83,7 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
 					    console.log('data received: ' + data);
 					});
 					
-					serialPort.write("G0 X100 Y100");
+					serialPort.write("G0X100Y100\r");
 				});        		
         		return;
         	});
