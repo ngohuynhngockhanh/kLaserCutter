@@ -13,10 +13,7 @@ var	express		=	require('express'),
 	Infinity	=	1e90,
 	exec 		=	require('child_process').exec,
 	svg2gcode	=	require('./lib/svg2gcode'),
-	SerialPort	= 	require("serialport").SerialPort,
-	serialPort	= 	new SerialPort("/dev/ttyS0", {
-		baudrate: 115200
-	});
+	SerialPort	= 	require("serialport").SerialPort;
 	
 
 //open port ttyS0
@@ -93,6 +90,9 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
         	var svg = svg2gcode.svg2gcode(data.toString(), argv);
         	fs.writeFile(pathUpload + '.sd', svg, function() {
         		res.send(phpjs.str_replace("\r\n", "<br />", svg));
+        		var serialPort	= 	new SerialPort("/dev/ttyS0", {
+					baudrate: 115200
+				})
 				serialPort.on("open", function () {
 					console.log('open');
 					serialPort.on('data', function(data) {
