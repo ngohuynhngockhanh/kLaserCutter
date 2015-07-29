@@ -82,7 +82,17 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
 					serialPort.on('data', function(data) {
 					    console.log('data received: ' + data);
 					});
-					serialPort.write(data.toString());
+					var command_list = phpjs.explode("\r", data.toString());
+					var idx = 0;
+					var run = true;
+					while (idx < command_list.length) {
+						if (run) {
+							run = false;
+							serialPort.write(command_list[idx] + "\r", function(error, result){
+								console.log('result ' + result);
+							});
+						}						
+					}
 					
 				});        		
         		return;
