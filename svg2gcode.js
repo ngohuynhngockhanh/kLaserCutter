@@ -12,20 +12,13 @@ var	express		=	require('express'),
 	phpjs		= 	require('phpjs'),
 	Infinity	=	1e90,
 	svg2gcode	=	require('./lib/svg2gcode'),
-<<<<<<< HEAD
-	exec		=	require('child_process').exec,
-	TextToSVG	=	require('text-to-svg').TextToSVG,
-	textToSVG	=	new TextToSVG();
-=======
-	SerialPort = require("serialport").SerialPort
-	serialPort = new SerialPort("/dev/ttyS0", {
+	SerialPort	= require("serialport").SerialPort,
+	serialPort	= new SerialPort("/dev/ttyS0", {
 		baudrate: 115200
 	});
->>>>>>> parent of e9e0e77... send gcode to kLaserCutter
 	
 
-//function
-
+/*
 
 
 //main program
@@ -45,8 +38,8 @@ process.stdin.on('end', function() {
 process.stdin.resume();
 
 
+*/
 
-/*
 app.use(bodyParser.urlencoded({
     extended: true
 }));
@@ -82,13 +75,6 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
         	var svg = svg2gcode.svg2gcode(data.toString(), argv);
         	fs.writeFile(pathUpload + '.sd', svg, function() {
         		res.send(phpjs.str_replace("\r\n", "<br />", svg));
-<<<<<<< HEAD
-        		var svg_lines = phpjs.explode("\r\n", svg);
-        		for (var i = 0; i < svg_lines.length; i++)
-        			exec('echo "' + svg_lines[i] + '" > /dev/ttyS0');
-=======
-        		
->>>>>>> parent of e9e0e77... send gcode to kLaserCutter
         		return;
         	});
 
@@ -104,7 +90,6 @@ io.sockets.on('connection', function (socket) {
 
 server.listen(90);
 console.log('Server runing port 90');
-*/
 
 
 serialPort.on("open", function () {
