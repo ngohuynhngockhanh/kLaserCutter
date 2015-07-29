@@ -33,6 +33,7 @@ exec('echo -n "1" > /sys/class/gpio/gpio4/value');
 exec('echo -n "0" > /sys/class/gpio/gpio40/value');
 exec('echo -n "0" > /sys/class/gpio/gpio41/value');
 exec('sudo stty -F /dev/ttyS0 115200 raw -echo');
+exec('sudo chmod a+rw /dev/ttyS0');
 console.log('open serialport /dev/ttyS0');
 
 /*
