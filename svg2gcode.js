@@ -16,10 +16,6 @@ var	express		=	require('express'),
 	SerialPort	= 	require("serialport").SerialPort;
 	
 
-//open port ttyS0
-
-
-console.log('open serialport /dev/ttyS0');
 
 /*
 

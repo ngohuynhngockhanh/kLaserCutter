@@ -13,3 +13,4 @@ echo -n "0" > /sys/class/gpio/gpio40/value
 echo -n "0" > /sys/class/gpio/gpio41/value
 
 sudo stty -F /dev/ttyS0 115200 raw -echo
+sudo chmod a+rw /dev/ttyS0
