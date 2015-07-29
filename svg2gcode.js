@@ -32,9 +32,7 @@ exec('echo -n "strong" > /sys/class/gpio/gpio41/drive');
 exec('echo -n "1" > /sys/class/gpio/gpio4/value');
 exec('echo -n "0" > /sys/class/gpio/gpio40/value');
 exec('echo -n "0" > /sys/class/gpio/gpio41/value');
-exec('echo -n "4" > /sys/class/gpio/unexport');
-exec('echo -n "40" > /sys/class/gpio/unexport');
-exec('echo -n "41" > /sys/class/gpio/unexport');
+exec('sudo stty -F /dev/ttyS0 115200 raw -echo');
 console.log('open serialport /dev/ttyS0');
 
 /*
