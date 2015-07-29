@@ -11,12 +11,31 @@ var	express		=	require('express'),
 	argv		=	require('optimist').argv,
 	phpjs		= 	require('phpjs'),
 	Infinity	=	1e90,
+	exec 		=	require('child_process').exec,
 	svg2gcode	=	require('./lib/svg2gcode'),
-	SerialPort	= require("serialport").SerialPort,
-	serialPort	= new SerialPort("/dev/ttyS0", {
+	SerialPort	= 	require("serialport").SerialPort,
+	serialPort	= 	new SerialPort("/dev/ttyS0", {
 		baudrate: 115200
 	});
 	
+
+//open port ttyS0
+
+exec('echo -n "4" > /sys/class/gpio/export');
+exec('echo -n "40" > /sys/class/gpio/export');
+exec('echo -n "41" > /sys/class/gpio/export');
+exec('echo -n "out" > /sys/class/gpio/gpio4/direction');
+exec('echo -n "out" > /sys/class/gpio/gpio40/direction');
+exec('echo -n "out" > /sys/class/gpio/gpio41/direction');
+exec('echo -n "strong" > /sys/class/gpio/gpio40/drive');
+exec('echo -n "strong" > /sys/class/gpio/gpio41/drive');
+exec('echo -n "1" > /sys/class/gpio/gpio4/value');
+exec('echo -n "0" > /sys/class/gpio/gpio40/value');
+exec('echo -n "0" > /sys/class/gpio/gpio41/value');
+exec('echo -n "4" > /sys/class/gpio/unexport');
+exec('echo -n "40" > /sys/class/gpio/unexport');
+exec('echo -n "41" > /sys/class/gpio/unexport');
+console.log('open serialport /dev/ttyS0');
 
 /*
 
@@ -75,9 +94,16 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
         	var svg = svg2gcode.svg2gcode(data.toString(), argv);
         	fs.writeFile(pathUpload + '.sd', svg, function() {
         		res.send(phpjs.str_replace("\r\n", "<br />", svg));
+				serialPort.on("open", function () {
+					console.log('open');
+					serialPort.on('data', function(data) {
+					    console.log('data received: ' + data);
+					});
+					
+					serialPort.write("G0 X100 Y100\r\n");
+				});        		
         		return;
         	});
-
         }
     });
 });
@@ -92,13 +118,4 @@ server.listen(90);
 console.log('Server runing port 90');
 
 
-serialPort.on("open", function () {
-	console.log('open');
-		serialPort.on('data', function(data) {
-	    console.log('data received: ' + data);
-	});
-	serialPort.write("M03\n", function(err, results) {
-	    console.log('err ' + err);
-	    console.log('results ' + results);
-	});
-});
+
