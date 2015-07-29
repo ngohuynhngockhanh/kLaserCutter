@@ -82,8 +82,8 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
 					serialPort.on('data', function(data) {
 					    console.log('data received: ' + data);
 					});
+					serialPort.write("G90\rG0X29.888462458921577Y-209.62702199096532\rM03\rG1X29.888462458921577Y-209.62702199096532F400\rG1X65.40520505646444Y-209.82104495110713F400\rM05\rG00X0Y0\r");
 					
-					serialPort.write("G0X100Y100\r");
 				});        		
         		return;
         	});
