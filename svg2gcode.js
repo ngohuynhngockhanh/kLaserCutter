@@ -85,6 +85,7 @@ function sendFirstGCodeLine() {
 		return false;
 	var command = gcodeQueue.shift();
 	serialPort.write(command + "\r");
+	console.log(command);
 	io.sockets.emit("GCODE", {command: command, length: gcodeQueue.length});
 	if (gcodeQueue.length == 0)
 		machineRunning = false;
@@ -111,12 +112,17 @@ function receiveData(data) {
 
 function addQueue(list) {
 	if (phpjs.is_string(list)) {
-		if (list.indexOf("\r") > -1) {
-			list = phpjs.str_replace("\n", '', list);
-			list = phpjs.explode("\r", list);
-		} else
-			list = phpjs.explode("\n", list);
+		//200% make sure list is a string :D
+		list = list.toString();
+		var commas = ["\r\n", "\r", "\n"];
+		for (var i = 0; i < commas.length; i++)
+			if (list.indexOf(commas[i]) > 0) {
+				list = phpjs.explode(commas[i], list);
+				break;
+			}				
 	}
+	
+	//new queue
 	gcodeQueue = list;
 }
 
