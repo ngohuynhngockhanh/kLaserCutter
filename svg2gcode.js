@@ -13,9 +13,18 @@ var	express		=	require('express'),
 	Infinity	=	1e90,
 	exec 		=	require('child_process').exec,
 	svg2gcode	=	require('./lib/svg2gcode'),
-	SerialPort	= 	require("serialport").SerialPort;
-	
+	serialport	=	require("serialport"),
+	SerialPort	= 	serialport.SerialPort,
+	serialPort	= 	new SerialPort("/dev/ttyS0", {
+					baudrate: 115200,
+					parser: serialport.parsers.readline("\n")
+				});
 
+var	gcodeQueue	= 	[],
+	maxQueue	=	3,				// Tối đa 8 lệnh trong hàng đợi
+	timer1		=	phpjs.time(),
+	okWaitTime	=	10000,				//10s
+	intervalTime	=	argv.waitTime || 1000;	//1s
 
 /*
 
@@ -74,27 +83,7 @@ app.post('/upload', multipartMiddleware, function(req, res, next) {
         	var svg = svg2gcode.svg2gcode(data.toString(), argv);
         	fs.writeFile(pathUpload + '.sd', svg, function() {
         		res.send(phpjs.str_replace("\r", "<br />", svg));
-        		var serialPort	= 	new SerialPort("/dev/ttyS0", {
-					baudrate: 115200
-				})
-				serialPort.on("open", function () {
-					console.log('open');
-					serialPort.on('data', function(data) {
-					    console.log('data received: ' + data);
-					});
-					var command_list = phpjs.explode("\r", data.toString());
-					var idx = 0;
-					var run = true;
-					while (idx < command_list.length) {
-						if (run) {
-							run = false;
-							serialPort.write(command_list[idx] + "\r", function(error, result){
-								console.log('result ' + result);
-							});
-						}						
-					}
-					
-				});        		
+        		gcodeQueue = phpjs.explode("\r", svg);				      		
         		return;
         	});
         }
@@ -110,5 +99,44 @@ io.sockets.on('connection', function (socket) {
 server.listen(90);
 console.log('Server runing port 90');
 
+function sendFirstGCodeLine() {
+	if (gcodeQueue.length == 0)
+		return false;
+	var command = gcodeQueue.shift();
+	serialPort.write(command + "\r");
+	console.log(command);
+	return true;
+}
 
+function sendGcodeFromQueue() {
+	var idx = 0;
+	while (gcodeQueue.length > 0 && idx < maxQueue) {
+		sendFirstGCodeLine();
+		idx++;
+	}
+}
 
+function receiveData(data) {
+	if (data.indexOf('<') == 0) {	//type <status,...>
+		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "\r", "\n"], '', data);
+		var data_array = phpjs.explode(',', data);
+
+		var status = data_array[0];
+		if (status == "Idle")
+			sendGcodeFromQueue();
+	} else if (data.indexOf('ok') == 0) {
+		sendGcodeFromQueue();
+
+	}
+}
+
+serialPort.on("open", function () {
+	console.log('open serial port');
+	serialPort.on('data', function(data) {
+		 receiveData(data);
+	});
+});
+
+var AT_interval = setInterval(function() {
+	serialPort.write("?\r");
+}, intervalTime);
