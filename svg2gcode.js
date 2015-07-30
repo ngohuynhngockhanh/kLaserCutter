@@ -109,11 +109,9 @@ function sendFirstGCodeLine() {
 }
 
 function sendGcodeFromQueue() {
-	var idx = 0;
-	while (gcodeQueue.length > 0 && idx < maxQueue) {
+
 		sendFirstGCodeLine();
-		idx++;
-	}
+
 }
 
 function receiveData(data) {
@@ -122,8 +120,7 @@ function receiveData(data) {
 		var data_array = phpjs.explode(',', data);
 
 		var status = data_array[0];
-		if (status == "Idle")
-			sendGcodeFromQueue();
+		
 	} else if (data.indexOf('ok') == 0) {
 		sendGcodeFromQueue();
 
