@@ -12,6 +12,7 @@ var	express		=	require('express'),
 	exec 		=	require('child_process').exec,
 	svg2gcode	=	require('./lib/svg2gcode'),
 	serialport	=	require("serialport"),
+	Vec2		=	require('vec2'),
 	SerialPort	= 	serialport.SerialPort,
 	serialPort	= 	new SerialPort("/dev/ttyS0", {
 					baudrate: 115200,
@@ -19,9 +20,14 @@ var	express		=	require('express'),
 				});
 
 var	gcodeQueue	= 	[],
+	currentQueue=	0,
+	maxQueue	=	7,							//<= 8. 7 the fastest and stable
 	timer1		=	phpjs.time(),
 	machineRunning=	false,
-	okWaitTime	=	10,				//10s
+	laserPos	=	new Vec2(0, 0),
+	goalPos		=	laserPos,
+	minDistance	=	30,							//30mm
+	okWaitTime	=	10,							//10s
 	intervalTime	=	argv.waitTime || 1500;	//1s
 
 /*
@@ -47,8 +53,6 @@ process.stdin.resume();
 */
 
 
-// Thư mục chứa ảnh upload trên server
-app.use('/pictures', express.static(__dirname + '/upload'));
 
 app.get('/', function(req, res) {
     res.sendfile(__dirname + '/index.html');
@@ -80,29 +84,45 @@ server.listen(90);
 siofu.listen(server);
 console.log('Server runing port 90');
 
+function getPosFromCommand(which, command) {
+	var tmp = phpjs.explode(which, command);
+	if (tmp.length == 1)
+		return undefined;
+	return phpjs.floatval(tmp[1]);
+}
 function sendFirstGCodeLine() {
 	if (gcodeQueue.length == 0)
 		return false;
 	var command = gcodeQueue.shift();
 	serialPort.write(command + "\r");
-	console.log(command);
+	
 	io.sockets.emit("GCODE", {command: command, length: gcodeQueue.length});
+	
+	var commandX = getPosFromCommand('X', command);
+	var commandY = getPosFromCommand('Y', command);
+	if (commandX != undefined && commandY != undefined)
+		goalPos = new Vec2(phpjs.floatval(commandX), phpjs.floatval(commandY));
+		
 	if (gcodeQueue.length == 0)
 		machineRunning = false;
 	return true;
 }
 
 function sendGcodeFromQueue() {
-	sendFirstGCodeLine();
+	if (currentQueue < maxQueue)
+		sendFirstGCodeLine();
+	currentQueue++;	
 }
 
 function receiveData(data) {
 	if (data.indexOf('<') == 0) {	//type <status,...>
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "\r", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
-		
+		laserPos = new Vec2(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
 		io.sockets.emit('position', data_array);
 		
+		if (laserPos.distance(goalPos) < minDistance)		
+			currentQueue = 0;
 	} else if (data.indexOf('ok') == 0) {
 		timer1 = phpjs.time();
 		sendGcodeFromQueue();
