@@ -89,6 +89,7 @@ siofu.listen(server);
 console.log('Server runing port 90');
 
 function start() {
+	io.sockets.emit('AllGcode', gcodeQueue);
 	machineRunning	= true;
 	machinePause	= false;
 	console.log("machine is running!");
