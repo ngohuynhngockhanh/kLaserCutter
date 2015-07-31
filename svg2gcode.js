@@ -21,14 +21,17 @@ var	express		=	require('express'),
 
 var	gcodeQueue	= 	[],
 	currentQueue=	0,
-	maxQueue	=	6,							//<= 8. 8 the fastest and stable
+	currentDistance=0,
+	maxDistance	=	8,							//queue has enough elements to run enough 8mm
+	minQueue	=	5,							// queue has at least 5 elements
 	timer1		=	phpjs.time(),
 	machineRunning=	false,
+	machinePause=	true,
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	laserPos,
-	minDistance	=	40,							//40mm
+	minDistance	=	7,							//7mm
 	okWaitTime	=	10,							//10s
-	intervalTime	=	argv.waitTime || 750;	//750ms
+	intervalTime	=	argv.waitTime || 1000;	//1s = 1000ms
 
 /*
 
@@ -70,6 +73,7 @@ io.sockets.on('connection', function (socket) {
 		var content = fs.readFileSync('./' + filepath).toString();
 		content = svg2gcode.svg2gcode(content, argv);
 		addQueue(content);
+		start();
     });
 	// Error handler:
     uploader.on("error", function(event){
@@ -83,6 +87,43 @@ io.sockets.on('connection', function (socket) {
 server.listen(90);
 siofu.listen(server);
 console.log('Server runing port 90');
+
+function start() {
+	machineRunning	= true;
+	machinePause	= false;
+	console.log("machine is running!");
+	serialPort.write("~\r");
+}
+
+function pause() {
+	machinePause = true;
+	serialPort.write("!\r");
+	console.log("pause");
+}
+
+function unpause() {
+	machinePause = false;
+	serialPort.write("~\r");
+	console.log("unpause");
+}
+
+function is_running() {
+	return machineRunning && !machinePause;
+}
+
+function softReset() {
+	console.log("reset");
+	serialPort.write("\030");
+}
+
+function sendCommand(command) {
+	if (is_running())
+		console.log("this machine is running, so you can't execute any command");
+	else {
+		console.log("send command " + command);
+		serialPort.write(command + "\r");
+	}
+}
 
 function getPosFromCommand(which, command) {
 	var tmp = phpjs.explode(which, command);
@@ -100,8 +141,11 @@ function sendFirstGCodeLine() {
 	
 	var commandX = getPosFromCommand('X', command);
 	var commandY = getPosFromCommand('Y', command);
-	if (commandX != undefined && commandY != undefined)
-		goalPos = new Vec2(phpjs.floatval(commandX), phpjs.floatval(commandY));
+	if (commandX != undefined && commandY != undefined) {
+		var newPos = new Vec2(phpjs.floatval(commandX), phpjs.floatval(commandY));
+		currentDistance += newPos.distance(goalPos);
+		goalPos = newPos;
+	}
 		
 	if (gcodeQueue.length == 0)
 		machineRunning = false;
@@ -109,9 +153,10 @@ function sendFirstGCodeLine() {
 }
 
 function sendGcodeFromQueue() {
-	if (currentQueue < maxQueue)
+	if (currentDistance < maxDistance || currentQueue < minQueue) {
 		sendFirstGCodeLine();
-	currentQueue++;	
+		currentQueue++;	
+	}
 }
 
 function receiveData(data) {
@@ -121,11 +166,18 @@ function receiveData(data) {
 		laserPos = new Vec2(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
 		io.sockets.emit('position', data_array);
 		
-		if (laserPos.distance(goalPos) < minDistance)		
+		if (laserPos.distance(goalPos) < minDistance) {
 			currentQueue = 0;
+			currentDistance = 0;
+		}
 	} else if (data.indexOf('ok') == 0) {
 		timer1 = phpjs.time();
-		sendGcodeFromQueue();
+		if (is_running())
+			sendGcodeFromQueue();
+	} else if (data.indexOf('error') > -1) {
+		io.sockets.emit('error', {id: 2, message: data});
+	} else {
+		io.sockets.emit('data', data);
 	}
 		
 }
