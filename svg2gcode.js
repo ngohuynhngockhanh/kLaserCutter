@@ -21,14 +21,14 @@ var	express		=	require('express'),
 
 var	gcodeQueue	= 	[],
 	currentQueue=	0,
-	maxQueue	=	7,							//<= 8. 7 the fastest and stable
+	maxQueue	=	6,							//<= 8. 8 the fastest and stable
 	timer1		=	phpjs.time(),
 	machineRunning=	false,
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	laserPos,
-	minDistance	=	30,							//30mm
+	minDistance	=	40,							//40mm
 	okWaitTime	=	10,							//10s
-	intervalTime	=	argv.waitTime || 1500;	//1s
+	intervalTime	=	argv.waitTime || 750;	//750ms
 
 /*
 
@@ -96,7 +96,7 @@ function sendFirstGCodeLine() {
 	var command = gcodeQueue.shift();
 	serialPort.write(command + "\r");
 	
-	io.sockets.emit("GCODE", {command: command, length: gcodeQueue.length});
+	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length});
 	
 	var commandX = getPosFromCommand('X', command);
 	var commandY = getPosFromCommand('Y', command);
