@@ -20,6 +20,7 @@ var	express		=	require('express'),
 				});
 
 var	gcodeQueue	= 	[],
+	gcodeDataQueue= [],
 	currentQueue=	0,
 	currentDistance=0,
 	maxDistance	=	8,							//queue has enough elements to run enough 8mm
@@ -73,14 +74,27 @@ io.sockets.on('connection', function (socket) {
 		var content = fs.readFileSync('./' + filepath).toString();
 		content = svg2gcode.svg2gcode(content, argv);
 		addQueue(content);
-		start();
+		sendQueue();
     });
 	// Error handler:
     uploader.on("error", function(event){
         console.log("Error from uploader", event);
     });
-	socket.on('message',function(data){
-  		console.log();
+	
+	socket.on('start',function(){
+  		start();
+	});
+	socket.on('requestQueue', function() {
+		sendQueue(socket);
+	});
+	socket.on('pause', function() {
+		pause();
+	});
+	socket.on('unpause', function() {
+		unpause();
+	});
+	socket.on('softReset', function() {
+		softReset();
 	});
 });
 
@@ -88,11 +102,30 @@ server.listen(90);
 siofu.listen(server);
 console.log('Server runing port 90');
 
-function start() {
-	io.sockets.emit('AllGcode', gcodeQueue);
+function sendQueue(socket) {
+	socket = socket || io.sockets;
+	console.log('sendQueue');
+	socket.emit('AllGcode', gcodeDataQueue);
+}
+
+function finish() {
+	console.log('finish');
+	io.sockets.emit('finish');
+	stop();
+}
+
+function stop() {
+	machineRunning	= false;
+	machinePause	= true;
+	console.log('stop!');
+}
+
+function start() {	
 	machineRunning	= true;
 	machinePause	= false;
 	console.log("machine is running!");
+	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
+		gcodeQueue = gcodeDataQueue.slice(0);
 	serialPort.write("~\r");
 }
 
@@ -133,8 +166,10 @@ function getPosFromCommand(which, command) {
 	return phpjs.floatval(tmp[1]);
 }
 function sendFirstGCodeLine() {
-	if (gcodeQueue.length == 0)
+	if (gcodeQueue.length == 0) {
+		finish();
 		return false;
+	}
 	var command = gcodeQueue.shift();
 	serialPort.write(command + "\r");
 	
@@ -148,8 +183,6 @@ function sendFirstGCodeLine() {
 		goalPos = newPos;
 	}
 		
-	if (gcodeQueue.length == 0)
-		machineRunning = false;
 	return true;
 }
 
@@ -197,6 +230,7 @@ function addQueue(list) {
 	
 	//new queue
 	gcodeQueue = list;
+	gcodeDataQueue = list.slice(0);
 }
 
 serialPort.on("open", function (error) {
@@ -220,5 +254,5 @@ serialPort.on("open", function (error) {
 var AT_interval = setInterval(function() {
 	serialPort.write("?\r");
 	if (machineRunning && phpjs.time() - timer1 > okWaitTime) 
-		io.socket.emit("error", {id: 0, message: 'Long time to wait ok response'});
+		io.sockets.emit("error", {id: 0, message: 'Long time to wait ok response'});
 }, intervalTime);
