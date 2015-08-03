@@ -31,9 +31,8 @@ var	gcodeQueue	= 	[],
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	laserPos,
 	minDistance	=	7,							//7mm
-	okWaitTime	=	10,							//10s
 	intervalTime	=	argv.waitTime || 1000;	//1s = 1000ms
-
+	argv.okWaitTime = argv.okWaitTime || 90;	//90s
 /*
 
 
@@ -253,6 +252,6 @@ serialPort.on("open", function (error) {
 
 var AT_interval = setInterval(function() {
 	serialPort.write("?\r");
-	if (machineRunning && phpjs.time() - timer1 > okWaitTime) 
+	if (machineRunning && phpjs.time() - timer1 > argv.okWaitTime) 
 		io.sockets.emit("error", {id: 0, message: 'Long time to wait ok response'});
 }, intervalTime);
