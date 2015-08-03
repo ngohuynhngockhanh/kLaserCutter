@@ -4,6 +4,7 @@ var	express		=	require('express'),
 	siofu 		= 	require("socketio-file-upload")
 	app        	= 	express(),
 	fs         	= 	require('fs'),
+	exec 		= 	require('child_process').exec,
 	server		=	require('http').createServer(app),
     io			=	require('socket.io').listen(server),
 	argv		=	require('optimist').argv,
@@ -19,13 +20,17 @@ var	express		=	require('express'),
 					parser: serialport.parsers.readline("\n")
 				});
 
+exec('mount -t tmpfs -o size=10M tmpfs ./upload/');	//mount ramdisk
+				
 var	gcodeQueue	= 	[],
 	gcodeDataQueue= [],
 	currentQueue=	0,
 	currentDistance=0,
 	maxDistance	=	8,							//queue has enough elements to run enough 8mm
-	minQueue	=	5,							// queue has at least 5 elements
+	minQueue	=	4,							// queue has at least 5 elements
+	maxQueue    =	20,							//queue has at maximum 20 elements
 	timer1		=	phpjs.time(),
+	timer2		=	0,
 	machineRunning=	false,
 	machinePause=	true,
 	laserPos	=	new Vec2(0, 0),
@@ -33,33 +38,7 @@ var	gcodeQueue	= 	[],
 	minDistance	=	7,							//7mm
 	intervalTime	=	argv.waitTime || 1000;	//1s = 1000ms
 	argv.okWaitTime = argv.okWaitTime || 90;	//90s
-/*
 
-
-//main program
-
-////read stdin data
-var svg = ""; // svg's data
-process.stdin.on('data', function(char) {
-	svg += char;
-});
-
-////start process svg data
-process.stdin.on('end', function() {
-	console.log(svg2gcode.svg2gcode(svg, argv));
-});
-
-//// end process data
-process.stdin.resume();
-
-
-*/
-
-
-
-app.get('/', function(req, res) {
-    res.sendfile(__dirname + '/index.html');
-});
 
 
 io.sockets.on('connection', function (socket) {
@@ -67,13 +46,22 @@ io.sockets.on('connection', function (socket) {
     uploader.dir = "./upload";
     uploader.listen(socket);
 	 // Do something when a file is saved:
-    uploader.on("saved", function(event){
+    uploader.on("complete", function(event){
         var file = event.file;
-		var filepath = file.pathName;
-		var content = fs.readFileSync('./' + filepath).toString();
-		content = svg2gcode.svg2gcode(content, argv);
-		addQueue(content);
-		sendQueue();
+		var filepath = './' + file.pathName;
+		var re = /(?:\.([^.]+))?$/;
+		var ext = re.exec(filepath)[1];
+		if (ext)
+			ext = phpjs.strtolower(ext);
+		setTimeout(function() {
+			var content = fs.readFileSync(filepath).toString();
+			if (!(ext == 'gcode' || ext == 'sd' || ext == 'txt'))
+				content = svg2gcode.svg2gcode(content, argv);
+			addQueue(content);
+			sendQueue();
+			fs.unlink(filepath);
+		}, file.size / 1024 / 2);
+		
     });
 	// Error handler:
     uploader.on("error", function(event){
@@ -94,6 +82,9 @@ io.sockets.on('connection', function (socket) {
 	});
 	socket.on('softReset', function() {
 		softReset();
+	});
+	socket.on('stop', function() {
+		stop();
 	});
 });
 
@@ -116,6 +107,9 @@ function finish() {
 function stop() {
 	machineRunning	= false;
 	machinePause	= true;
+	timer2			= 0;
+	serialPort.write("M5\r");
+	serialPort.write("g0x0y0z0\r");
 	console.log('stop!');
 }
 
@@ -123,6 +117,7 @@ function start() {
 	machineRunning	= true;
 	machinePause	= false;
 	console.log("machine is running!");
+	timer2 = phpjs.time();
 	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
 		gcodeQueue = gcodeDataQueue.slice(0);
 	serialPort.write("~\r");
@@ -169,11 +164,18 @@ function sendFirstGCodeLine() {
 		finish();
 		return false;
 	}
+	
+	
 	var command = gcodeQueue.shift();
+	command = command.split(';');
+	command = command[0];
+	if (phpjs.strlen(command) <= 1 || command.indexOf(";") == 0)   //igrone comment line
+		return sendFirstGCodeLine();
+	command = phpjs.strtoupper(command);
 	serialPort.write(command + "\r");
 	
-	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length});
-	
+	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length}, timer2);
+	currentQueue++;	
 	var commandX = getPosFromCommand('X', command);
 	var commandY = getPosFromCommand('Y', command);
 	if (commandX != undefined && commandY != undefined) {
@@ -186,9 +188,8 @@ function sendFirstGCodeLine() {
 }
 
 function sendGcodeFromQueue() {
-	if (currentDistance < maxDistance || currentQueue < minQueue) {
+	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue <= maxQueue) {
 		sendFirstGCodeLine();
-		currentQueue++;	
 	}
 }
 
@@ -197,7 +198,7 @@ function receiveData(data) {
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "\r", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
 		laserPos = new Vec2(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
-		io.sockets.emit('position', data_array);
+		io.sockets.emit('position', data_array, machineRunning, machinePause);
 		
 		if (laserPos.distance(goalPos) < minDistance) {
 			currentQueue = 0;
@@ -252,6 +253,6 @@ serialPort.on("open", function (error) {
 
 var AT_interval = setInterval(function() {
 	serialPort.write("?\r");
-	if (machineRunning && phpjs.time() - timer1 > argv.okWaitTime) 
+	if (is_running() && phpjs.time() - timer1 > argv.okWaitTime) 
 		io.sockets.emit("error", {id: 0, message: 'Long time to wait ok response'});
 }, intervalTime);
