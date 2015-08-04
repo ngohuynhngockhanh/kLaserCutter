@@ -122,7 +122,7 @@ function sendQueue(socket) {
 function sendSVG(content, socket) {
 	socket = socket || io.sockets;
 	console.log('sendSVG');
-	socket.emit('sendSVG', content);
+	socket.emit('sendSVG', phpjs.str_replace(["viewbox", "viewBox"], "removeViewBoxUh", content));
 }
 
 function finish() {
