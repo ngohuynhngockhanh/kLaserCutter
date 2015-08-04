@@ -102,6 +102,9 @@ io.sockets.on('connection', function (socket) {
 	socket.on('stop', function() {
 		stop();
 	});
+	socket.on('cmd', function(cmd) {
+		serialPort.write(cmd + "\r");
+	});
 	
 	socket.emit("settings", argv);
 });
@@ -122,7 +125,7 @@ function sendQueue(socket) {
 function sendSVG(content, socket) {
 	socket = socket || io.sockets;
 	console.log('sendSVG');
-	socket.emit('sendSVG', phpjs.str_replace(["viewbox", "viewBox"], "removeViewBoxUh", content));
+	socket.emit('sendSVG', content);
 }
 
 function finish() {
