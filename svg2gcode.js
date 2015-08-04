@@ -24,6 +24,7 @@ exec('mount -t tmpfs -o size=10M tmpfs ./upload/');	//mount ramdisk
 				
 var	gcodeQueue	= 	[],
 	gcodeDataQueue= [],
+	SVGcontent	=	"",
 	currentQueue=	0,
 	currentDistance=0,
 	maxDistance	=	8,							//queue has enough elements to run enough 8mm
@@ -38,13 +39,21 @@ var	gcodeQueue	= 	[],
 	minDistance	=	7,							//7mm
 	intervalTime	=	argv.waitTime || 1000;	//1s = 1000ms
 	argv.okWaitTime = argv.okWaitTime || 90;	//90s
-
+	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
 
 
 io.sockets.on('connection', function (socket) {
 	var uploader = new siofu();
     uploader.dir = "./upload";
     uploader.listen(socket);
+	uploader.on("start", function(event) {
+		var file = event.file;
+		var fileSize = file.size;
+		if (fileSize > argv.maxFileSize) {
+			socket.emit("error", {id: 3, message: "MAX FILE FILE is " + (settings.maxFileSize / 1024 / 1024) + "MB"});
+			return false;
+		}
+	});
 	 // Do something when a file is saved:
     uploader.on("complete", function(event){
         var file = event.file;
@@ -55,8 +64,15 @@ io.sockets.on('connection', function (socket) {
 			ext = phpjs.strtolower(ext);
 		setTimeout(function() {
 			var content = fs.readFileSync(filepath).toString();
-			if (!(ext == 'gcode' || ext == 'sd' || ext == 'txt'))
-				content = svg2gcode.svg2gcode(content, argv);
+			SVGcontent = content;
+			var isGCODEfile = (ext == 'gcode' || ext == 'sd' || ext == 'txt');
+			var options = argv;
+			socket.emit("percent");	
+			if (!isGCODEfile)
+				content = svg2gcode.svg2gcode(content, options);
+			
+			if (ext != 'svg')
+				SVGcontent = "";
 			addQueue(content);
 			sendQueue();
 			fs.unlink(filepath);
@@ -86,6 +102,8 @@ io.sockets.on('connection', function (socket) {
 	socket.on('stop', function() {
 		stop();
 	});
+	
+	socket.emit("settings", argv);
 });
 
 server.listen(90);
@@ -96,6 +114,15 @@ function sendQueue(socket) {
 	socket = socket || io.sockets;
 	console.log('sendQueue');
 	socket.emit('AllGcode', gcodeDataQueue);
+	if (SVGcontent != "") {
+		sendSVG(SVGcontent);
+	}
+}
+
+function sendSVG(content, socket) {
+	socket = socket || io.sockets;
+	console.log('sendSVG');
+	socket.emit('sendSVG', content);
 }
 
 function finish() {
