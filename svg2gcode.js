@@ -4,7 +4,7 @@ var	express		=	require('express'),
 	siofu 		= 	require("socketio-file-upload")
 	app        	= 	express(),
 	fs         	= 	require('fs'),
-	exec 		= 	require('child_process').exec,
+	exec 		= 	require('child_process').execSync,
 	server		=	require('http').createServer(app),
     io			=	require('socket.io').listen(server),
 	argv		=	require('optimist').argv,
@@ -14,12 +14,16 @@ var	express		=	require('express'),
 	svg2gcode	=	require('./lib/svg2gcode'),
 	serialport	=	require("serialport"),
 	Vec2		=	require('vec2'),
+	MJPG_Streamer=	require('./lib/mjpg_streamer'),
+	mjpg_streamer=  new MJPG_Streamer(),
 	SerialPort	= 	serialport.SerialPort,
 	serialPort	= 	new SerialPort("/dev/ttyS0", {
 					baudrate: 115200,
 					parser: serialport.parsers.readline("\n")
 				});
 
+		
+				
 exec('mount -t tmpfs -o size=10M tmpfs ./upload/');	//mount ramdisk
 				
 var	gcodeQueue	= 	[],
@@ -31,17 +35,20 @@ var	gcodeQueue	= 	[],
 	minQueue	=	4,							// queue has at least 5 elements
 	maxQueue    =	20,							//queue has at maximum 20 elements
 	timer1		=	phpjs.time(),
+	timer2		=	phpjs.time(),
 	timer2		=	0,
 	machineRunning=	false,
 	machinePause=	true,
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	laserPos,
 	minDistance	=	7,							//7mm
-	intervalTime	=	argv.waitTime || 1000;	//1s = 1000ms
-	argv.okWaitTime = argv.okWaitTime || 90;	//90s
+	intervalTime1	=	argv.intervalTime1 || 10000;	//10s = 10000ms. Each 10s, we check grbl status once
+	intervalTime2	=	argv.intervalTime2 || 10000;	//10s = 10000ms. Each 10s, we check camera status once
 	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
 
 
+//app.use(express.static(__dirname + '/upload'));
+	
 io.sockets.on('connection', function (socket) {
 	var uploader = new siofu();
     uploader.dir = "./upload";
@@ -190,25 +197,38 @@ function getPosFromCommand(which, command) {
 	return phpjs.floatval(tmp[1]);
 }
 function sendFirstGCodeLine() {
-	if (gcodeQueue.length == 0) {
+	if (gcodeQueue.length == 0) {	// is empty list
 		finish();
 		return false;
 	}
 	
 	
+	//get the last command.
 	var command = gcodeQueue.shift();
+	//comment filter
 	command = command.split(';');
 	command = command[0];
+	
+	//if command is just a command, we check again
 	if (phpjs.strlen(command) <= 1 || command.indexOf(";") == 0)   //igrone comment line
 		return sendFirstGCodeLine();
+		
+	//convert command to upper style
 	command = phpjs.strtoupper(command);
+	
+	
+	//write command to grbl
 	serialPort.write(command + "\r");
 	
+	
+	// send gcode command to client
 	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length}, timer2);
 	currentQueue++;	
+	
+	//get X and Y position from the command to count the length that the machine has run
 	var commandX = getPosFromCommand('X', command);
 	var commandY = getPosFromCommand('Y', command);
-	if (commandX != undefined && commandY != undefined) {
+	if (commandX != undefined && commandY != undefined) { //if exist x or y coordinate.
 		var newPos = new Vec2(phpjs.floatval(commandX), phpjs.floatval(commandY));
 		currentDistance += newPos.distance(goalPos);
 		goalPos = newPos;
@@ -218,9 +238,8 @@ function sendFirstGCodeLine() {
 }
 
 function sendGcodeFromQueue() {
-	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue <= maxQueue) {
+	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue <= maxQueue)
 		sendFirstGCodeLine();
-	}
 }
 
 function receiveData(data) {
@@ -274,15 +293,20 @@ serialPort.on("open", function (error) {
 				if (e != undefined)
 					io.sockets.emit('error');
 			});
-		}, intervalTime);
+		}, intervalTime1);
 		serialPort.on('data', function(data) {
 			 receiveData(data);
 		});
 	}
 });
 
-var AT_interval = setInterval(function() {
+var AT_interval1 = setInterval(function() {
 	serialPort.write("?\r");
-	if (is_running() && phpjs.time() - timer1 > argv.okWaitTime) 
+	if (is_running() && phpjs.time() - timer1 > intervalTime1) 
 		io.sockets.emit("error", {id: 0, message: 'Long time to wait ok response'});
-}, intervalTime);
+}, intervalTime1);
+
+var AT_interval2 = setInterval(function() {
+	var log = mjpg_streamer.tryRun();
+	console.log(log);
+}, intervalTime2);
