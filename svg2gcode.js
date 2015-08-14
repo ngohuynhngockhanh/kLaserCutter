@@ -142,9 +142,9 @@ io.sockets.on('connection', function (socket) {
 	socket.emit("settings", argv);
 });
 
-server.listen(90);
+server.listen(9090);
 siofu.listen(server);
-console.log('Server runing port 90');
+console.log('Server runing port 9090');
 
 function sendQueue(socket) {
 	socket = socket || io.sockets;
@@ -338,10 +338,10 @@ function addQueue(list) {
 }
 
 function write2serial(command, func) {
-	if (!relayStepperStatus && command.length > 1) {
+	if (relayStepperStatus == 0 && command.length > 1) {
 		relayStepperStatus = 1;
 		board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
-		sleep.usleep(100000);
+		sleep.sleep(1); //sleep 1 s
 	}
 	command += "\r";
 	if (func) 
