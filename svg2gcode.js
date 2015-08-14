@@ -14,6 +14,11 @@ var	express		=	require('express'),
 	serialport	=	require("serialport"),
 	Vec2		=	require('vec2'),
 	sh 			= 	require('execSync'),
+	five		=	require("johnny-five"),
+	Galileo		=	require("galileo-io"),
+	board		=	new five.Board({
+					io: new Galileo()
+				}),
 	MJPG_Streamer=	require('./lib/mjpg_streamer'),
 	mjpg_streamer=  new MJPG_Streamer(),
 	SerialPort	= 	serialport.SerialPort,	
@@ -51,6 +56,12 @@ var	gcodeQueue	= 	[],
 	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
 	argv.ionicAppId	=	argv.ionicAppId || '46a9aa6b';
 
+	
+
+board.on("ready", function() {
+	var led = new five.Led(13);
+	led.blink(500);
+});
 
 //app.use(express.static(__dirname + '/upload'));
 	
@@ -154,18 +165,17 @@ function finish() {
 }
 
 function stop(sendPush) {
+	serialPort.write("M5\r");
+	serialPort.write("g0x0y0z0\r");
 	sendPush = sendPush || true;
 	machineRunning	= false;
 	machinePause	= true;
 	timer2			= 0;
 	gcodeQueue 		= gcodeDataQueue.slice(0);
 	stopCountingTime();
-	serialPort.write("M5\r");
-	serialPort.write("g0x0y0z0\r");
 	console.log('stop!');
-	if (sendPush) {
+	if (sendPush)
 		sendPushNotification("The machine was stopped");
-	}
 }
 
 function sendPushNotification(message) {
