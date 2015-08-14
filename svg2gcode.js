@@ -13,6 +13,7 @@ var	express		=	require('express'),
 	svg2gcode	=	require('./lib/svg2gcode'),
 	serialport	=	require("serialport"),
 	Vec2		=	require('vec2'),
+	sleep		=	require('sleep'),
 	sh 			= 	require('execSync'),
 	five		=	require("johnny-five"),
 	Galileo		=	require("galileo-io"),
@@ -43,6 +44,9 @@ var	gcodeQueue	= 	[],
 	timer1		=	phpjs.time(),
 	timer2		=	phpjs.time(),
 	timer2		=	0,
+	timer3		=	phpjs.time(),
+	relayStepperVoltagePin	= 3,
+	relayStepperStatus		= 1,
 	machineRunning=	false,
 	machinePause=	true,
 	laserPos	=	new Vec2(0, 0),
@@ -52,6 +56,7 @@ var	gcodeQueue	= 	[],
 	intervalTime2	=	argv.intervalTime2 || 10000,	//10s = 10000ms. Each 10s, we check camera status once
 	intervalTime3	= 	argv.intervalTime3 || 800,		//check current laser after 800ms
 	intervalTime4	=	argv.intervalTime4 || 30000;	//30s = 30000ms. Each 30s, we check server load once
+	intervalTime5	=	argv.intervalTime5 || 60;		//60s. Each 1 minute, we check grbl status to change to power saving mode
 	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
 	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
 	argv.ionicAppId	=	argv.ionicAppId || '46a9aa6b';
@@ -59,8 +64,7 @@ var	gcodeQueue	= 	[],
 	
 
 board.on("ready", function() {
-	var led = new five.Led(13);
-	led.blink(500);
+	board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
 });
 
 //app.use(express.static(__dirname + '/upload'));
@@ -126,7 +130,7 @@ io.sockets.on('connection', function (socket) {
 		stop();
 	});
 	socket.on('cmd', function(cmd) {
-		serialPort.write(cmd + "\r");
+		write2serial(cmd);
 	});
 	
 	socket.on('token', function(token) {
@@ -165,8 +169,8 @@ function finish() {
 }
 
 function stop(sendPush) {
-	serialPort.write("M5\r");
-	serialPort.write("g0x0y0z0\r");
+	write2serial("M5");
+	write2serial("g0x0y0z0");
 	sendPush = sendPush || true;
 	machineRunning	= false;
 	machinePause	= true;
@@ -196,19 +200,19 @@ function start() {
 	timer2 = phpjs.time();
 	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
 		gcodeQueue = gcodeDataQueue.slice(0);
-	serialPort.write("~\r");
+	write2serial("~");
 	sendPushNotification("The machine has just been started!");
 }
 
 function pause() {
 	machinePause = true;
-	serialPort.write("!\r");
+	write2serial("!");
 	console.log("pause");
 }
 
 function unpause() {
 	machinePause = false;
-	serialPort.write("~\r");
+	write2serial("~");
 	console.log("unpause");
 }
 
@@ -222,7 +226,7 @@ function is_running() {
 
 function softReset() {
 	console.log("reset");
-	serialPort.write("\030");
+	write2serial("\030");
 }
 
 function sendCommand(command) {
@@ -230,7 +234,7 @@ function sendCommand(command) {
 		console.log("this machine is running, so you can't execute any command");
 	else {
 		console.log("send command " + command);
-		serialPort.write(command + "\r");
+		write2serial(command + "");
 	}
 }
 
@@ -262,7 +266,7 @@ function sendFirstGCodeLine() {
 	
 	
 	//write command to grbl
-	serialPort.write(command + "\r");
+	write2serial(command + "");
 	
 	
 	// send gcode command to client
@@ -288,7 +292,7 @@ function sendGcodeFromQueue() {
 
 function receiveData(data) {
 	if (data.indexOf('<') == 0) {	//type <status,...>
-		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "\r", "\n"], '', data);
+		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
 		laserPos = new Vec2(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
 		
@@ -298,6 +302,11 @@ function receiveData(data) {
 		if (laserPos.distance(goalPos) < minDistance) {
 			currentQueue = 0;
 			currentDistance = 0;
+		}
+		if (phpjs.time() - timer3 > intervalTime5) {
+			relayStepperStatus = (data_array[0] == 'Idle') ? 0 : 1;
+			board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
+			timer3 = phpjs.time();
 		}
 	} else if (data.indexOf('ok') == 0) {
 		timer1 = phpjs.time();
@@ -328,6 +337,19 @@ function addQueue(list) {
 	gcodeDataQueue = list.slice(0);
 }
 
+function write2serial(command, func) {
+	if (!relayStepperStatus && command.length > 1) {
+		relayStepperStatus = 1;
+		board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
+		sleep.usleep(100000);
+	}
+	command += "\r";
+	if (func) 
+		serialPort.write(command, func);
+	else 
+		serialPort.write(command);
+}
+
 serialPort.on("open", function (error) {
 	if (error) {
 		console.log(error);
@@ -335,7 +357,7 @@ serialPort.on("open", function (error) {
 	} else {
 		console.log('open serial port');
 		var interval = setInterval(function() {
-			serialPort.write("?\r", function (e) {
+			write2serial("?", function (e) {
 				if (e != undefined)
 					io.sockets.emit('error');
 			});
@@ -347,7 +369,7 @@ serialPort.on("open", function (error) {
 });
 
 var AT_interval1 = setInterval(function() {
-	serialPort.write("?\r");
+	write2serial("?");
 	if (is_running() && phpjs.time() - timer1 > intervalTime1) 
 		io.sockets.emit("error", {id: 0, message: 'Long time to wait ok response'});
 }, intervalTime1);
