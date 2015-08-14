@@ -4,7 +4,6 @@ var	express		=	require('express'),
 	siofu 		= 	require("socketio-file-upload")
 	app        	= 	express(),
 	fs         	= 	require('fs'),
-	exec 		= 	require('child_process').execSync,
 	server		=	require('http').createServer(app),
     io			=	require('socket.io').listen(server),
 	argv		=	require('optimist').argv,
@@ -14,9 +13,10 @@ var	express		=	require('express'),
 	svg2gcode	=	require('./lib/svg2gcode'),
 	serialport	=	require("serialport"),
 	Vec2		=	require('vec2'),
+	sh 			= 	require('execSync'),
 	MJPG_Streamer=	require('./lib/mjpg_streamer'),
 	mjpg_streamer=  new MJPG_Streamer(),
-	SerialPort	= 	serialport.SerialPort,
+	SerialPort	= 	serialport.SerialPort,	
 	serialPort	= 	new SerialPort("/dev/ttyS0", {
 					baudrate: 115200,
 					parser: serialport.parsers.readline("\n")
@@ -28,6 +28,7 @@ exec('mount -t tmpfs -o size=10M tmpfs ./upload/');	//mount ramdisk
 				
 var	gcodeQueue	= 	[],
 	gcodeDataQueue= [],
+	tokenDevice	=	[],
 	SVGcontent	=	"",
 	currentQueue=	0,
 	currentDistance=0,
@@ -42,9 +43,13 @@ var	gcodeQueue	= 	[],
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	laserPos,
 	minDistance	=	7,							//7mm
-	intervalTime1	=	argv.intervalTime1 || 10000;	//10s = 10000ms. Each 10s, we check grbl status once
-	intervalTime2	=	argv.intervalTime2 || 10000;	//10s = 10000ms. Each 10s, we check camera status once
+	intervalTime1	=	argv.intervalTime1 || 10000,	//10s = 10000ms. Each 10s, we check grbl status once
+	intervalTime2	=	argv.intervalTime2 || 10000,	//10s = 10000ms. Each 10s, we check camera status once
+	intervalTime3	= 	argv.intervalTime3 || 800,		//check current laser after 800ms
+	intervalTime4	=	argv.intervalTime4 || 30000;	//30s = 30000ms. Each 30s, we check server load once
 	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
+	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
+	argv.ionicAppId	=	argv.ionicAppId || '46a9aa6b';
 
 
 //app.use(express.static(__dirname + '/upload'));
@@ -113,6 +118,12 @@ io.sockets.on('connection', function (socket) {
 		serialPort.write(cmd + "\r");
 	});
 	
+	socket.on('token', function(token) {
+		if (tokenDevice.indexOf(token) == -1) 
+			tokenDevice.push(token);
+		console.log(tokenDevice);
+	});
+	
 	socket.emit("settings", argv);
 });
 
@@ -138,16 +149,34 @@ function sendSVG(content, socket) {
 function finish() {
 	console.log('finish');
 	io.sockets.emit('finish');
-	stop();
+	sendPushNotification("I have just finished my job! ^-^");
+	stop(false);
 }
 
-function stop() {
+function stop(sendPush) {
+	sendPush = sendPush || true;
 	machineRunning	= false;
 	machinePause	= true;
 	timer2			= 0;
+	gcodeQueue 		= gcodeDataQueue.slice(0);
+	stopCountingTime();
 	serialPort.write("M5\r");
 	serialPort.write("g0x0y0z0\r");
 	console.log('stop!');
+	if (sendPush) {
+		sendPushNotification("The machine was stopped");
+	}
+}
+
+function sendPushNotification(message) {
+	var post_data = {
+		"tokens": tokenDevice,
+		"notification":{
+			"alert": message
+		}
+	};
+	var command = "curl -u " + argv.privateApiKey + ": -H \"Content-Type: application/json\" -H \"X-Ionic-Application-Id: " + argv.ionicAppId + "\" https://push.ionic.io/api/v1/push -d '" + JSON.stringify(post_data) + "'";
+	exec(command);
 }
 
 function start() {	
@@ -158,6 +187,7 @@ function start() {
 	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
 		gcodeQueue = gcodeDataQueue.slice(0);
 	serialPort.write("~\r");
+	sendPushNotification("The machine has just been started!");
 }
 
 function pause() {
@@ -170,6 +200,10 @@ function unpause() {
 	machinePause = false;
 	serialPort.write("~\r");
 	console.log("unpause");
+}
+
+function stopCountingTime() {
+	io.sockets.emit("stopCountingTime");
 }
 
 function is_running() {
@@ -247,6 +281,8 @@ function receiveData(data) {
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "\r", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
 		laserPos = new Vec2(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
+		
+		
 		io.sockets.emit('position', data_array, machineRunning, machinePause);
 		
 		if (laserPos.distance(goalPos) < minDistance) {
@@ -293,7 +329,7 @@ serialPort.on("open", function (error) {
 				if (e != undefined)
 					io.sockets.emit('error');
 			});
-		}, intervalTime1);
+		}, intervalTime3);
 		serialPort.on('data', function(data) {
 			 receiveData(data);
 		});
@@ -308,5 +344,14 @@ var AT_interval1 = setInterval(function() {
 
 var AT_interval2 = setInterval(function() {
 	var log = mjpg_streamer.tryRun();
-	console.log(log);
+	io.sockets.emit("mjpg_log", log);
 }, intervalTime2);
+
+var AT_interval4 = setInterval(function() {
+	var serverLoad	= sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout;
+	var tempGalileo	= sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout;
+	io.sockets.emit("system_log", {
+		'serverLoad'	: serverLoad,
+		'tempGalileo'	: tempGalileo
+	});
+}, intervalTime4);
