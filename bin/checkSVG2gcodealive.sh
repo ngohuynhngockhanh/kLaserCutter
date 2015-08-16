@@ -1,7 +1,8 @@
 #!/bin/bash 
 
 process="svg2gcode.js"
-
+#mount ramdisk
+mount -t tmpfs -o size=10M tmpfs ./../upload/ 
 while true;
 do
 	if ps | grep -v grep | grep $process > /dev/null         
@@ -9,7 +10,7 @@ do
 		echo "Process $process is running"         
 	else        
 		echo "Start SVG2gcode again"
-		cd /home/laser && ./svg2gcode.js > ./l.log 2> ./n.log
+		cd /home/laser && ./svg2gcode.js > /dev/null 2>&1 &
 	fi
 	sleep 10
 done

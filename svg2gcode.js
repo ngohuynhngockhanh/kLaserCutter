@@ -18,7 +18,9 @@ var	express		=	require('express'),
 	five		=	require("johnny-five"),
 	Galileo		=	require("galileo-io"),
 	board		=	new five.Board({
-					io: new Galileo()
+					io: new Galileo(),
+					repl: false,
+					debug: false,
 				}),
 	MJPG_Streamer=	require('./lib/mjpg_streamer'),
 	mjpg_streamer=  new MJPG_Streamer(),
@@ -30,7 +32,7 @@ var	express		=	require('express'),
 
 		
 				
-exec('mount -t tmpfs -o size=10M tmpfs ./upload/');	//mount ramdisk
+
 				
 var	gcodeQueue	= 	[],
 	gcodeDataQueue= [],
@@ -45,7 +47,12 @@ var	gcodeQueue	= 	[],
 	timer2		=	phpjs.time(),
 	timer2		=	0,
 	timer3		=	phpjs.time(),
-	relayStepperVoltagePin	= 3,
+	socketClientCount	= 0,
+	lcd,
+	ipAddress,
+	newConnection,								//implement
+	sendLCDMessage,
+	relayStepperVoltagePin	= 6,
 	relayStepperStatus		= 1,
 	machineRunning=	false,
 	machinePause=	true,
@@ -55,25 +62,104 @@ var	gcodeQueue	= 	[],
 	intervalTime1	=	argv.intervalTime1 || 10000,	//10s = 10000ms. Each 10s, we check grbl status once
 	intervalTime2	=	argv.intervalTime2 || 10000,	//10s = 10000ms. Each 10s, we check camera status once
 	intervalTime3	= 	argv.intervalTime3 || 800,		//check current laser after 800ms
-	intervalTime4	=	argv.intervalTime4 || 30000;	//30s = 30000ms. Each 30s, we check server load once
+	intervalTime4	=	argv.intervalTime4 || 30000,	//30s = 30000ms. Each 30s, we check server load once
 	intervalTime5	=	argv.intervalTime5 || 60;		//60s. Each 1 minute, we check grbl status to change to power saving mode
+//argv
 	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
 	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
 	argv.ionicAppId	=	argv.ionicAppId || '46a9aa6b';
+	argv.LCDcontroller = argv.LCDcontroller || "PCF8574";
 
 	
 
 board.on("ready", function() {
-	board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
+	board.digitalWrite(relayStepperVoltagePin, relayStepperStatus); // turn on relay to test 
+
+	var lcdTimeout;
+	
+	var lcd = new five.LCD({
+		controller: argv.LCDcontroller
+	});
+	ipAddress = "";
+	do {
+		ipAddress = sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout;
+		if (phpjs.strlen(ipAddress) > 7) {
+			lcd.clear();
+			lcd.cursor(0, 0).print("IP Address:");
+			lcd.cursor(1, 0).print(phpjs.str_replace("\n", "", ipAddress));
+			lcd.backlight();
+			setLCDTimeout(function() {
+				lcd.noBacklight();
+			}, 30000);
+			break;
+		} else {
+			lcd.clear();
+			for (var i = 5 ; i >= 1; i--) {
+				lcd.cursor(0, 0).print("Wait for IP");
+				lcd.cursor(1, 0).print(".............." + i + "s");
+				sleep.sleep(1);
+			}
+		}
+	} while (phpjs.strlen(ipAddress) > 7);
+	
+	function killLCDTimeout() {
+		if (lcdTimeout)
+			clearTimeout(lcdTimeout);
+	}
+	function setLCDTimeout(func, timeout) {
+		killLCDTimeout();
+		lcdTimeout = setTimeout(func, timeout);
+	}
+	newConnection = function(address) {
+		lcd.clear();
+		lcd.cursor(0, 0).print(phpjs.sprintf("Connection(s):%02d", socketClientCount));
+		lcd.cursor(1, 0).print(phpjs.trim(address));
+		lcd.backlight();
+		setLCDTimeout(function() {
+			lcd.noBacklight();
+		}, 10000);
+	}
+	sendLCDMessage = function(message, timeout) {
+		timeout = timeout || 20000;
+		console.log(message);
+		var length = phpjs.strlen(message);
+		var tryDraw = function(idx, length) {
+			lcd.clear();
+			lcd.backlight();
+			for (var i = 0; i < 16 * 2; i++) {
+				var x = phpjs.intval(i / 16);
+				var y = i % 16;
+				lcd.cursor(x, y).print(message[idx]);
+				idx++;
+				
+				if (idx == length) {
+					setLCDTimeout(function() {
+						lcd.noBacklight();
+					}, timeout);
+					return;
+				}
+			}
+			setLCDTimeout(function() {
+				tryDraw(idx, length);
+			}, 1000);
+		}
+		tryDraw(0, length);
+	}
 });
 
 //app.use(express.static(__dirname + '/upload'));
 	
 io.sockets.on('connection', function (socket) {
+	socketClientCount++;
+	//socket ip
+	if (newConnection)
+		newConnection(socket.handshake.address);
+	
 	var uploader = new siofu();
     uploader.dir = "./upload";
     uploader.listen(socket);
 	uploader.on("start", function(event) {
+		console.log("upload task starts");
 		var file = event.file;
 		var fileSize = file.size;
 		if (fileSize > argv.maxFileSize) {
@@ -83,18 +169,21 @@ io.sockets.on('connection', function (socket) {
 	});
 	 // Do something when a file is saved:
     uploader.on("complete", function(event){
+		console.log("upload complete");
         var file = event.file;
 		var filepath = './' + file.pathName;
 		var re = /(?:\.([^.]+))?$/;
 		var ext = re.exec(filepath)[1];
 		if (ext)
 			ext = phpjs.strtolower(ext);
+		
 		setTimeout(function() {
 			var content = fs.readFileSync(filepath).toString();
 			SVGcontent = content;
 			var isGCODEfile = (ext == 'gcode' || ext == 'sd' || ext == 'txt');
 			var options = argv;
 			socket.emit("percent");	
+			console.log(filepath);
 			if (!isGCODEfile)
 				content = svg2gcode.svg2gcode(content, options);
 			
@@ -103,6 +192,8 @@ io.sockets.on('connection', function (socket) {
 			addQueue(content);
 			sendQueue();
 			fs.unlink(filepath);
+			if (sendLCDMessage)
+				sendLCDMessage("Upload completed" + file.name);
 		}, file.size / 1024 / 2);
 		
     });
@@ -110,24 +201,34 @@ io.sockets.on('connection', function (socket) {
     uploader.on("error", function(event){
         console.log("Error from uploader", event);
     });
-	
+	socket.on('disconnect', function() {
+		socketClientCount--;
+	});
 	socket.on('start',function(){
-  		start();
+		start();
+		if (sendLCDMessage)
+			sendLCDMessage("It's running ^^!Yeah, so cool.");
 	});
 	socket.on('requestQueue', function() {
 		sendQueue(socket);
 	});
 	socket.on('pause', function() {
 		pause();
+		if (sendLCDMessage)
+			sendLCDMessage("Pause");		
 	});
 	socket.on('unpause', function() {
 		unpause();
+		if (sendLCDMessage)
+			sendLCDMessage("Resuming...");		
 	});
 	socket.on('softReset', function() {
 		softReset();
 	});
 	socket.on('stop', function() {
 		stop();
+		if (sendLCDMessage)
+			sendLCDMessage("Stopped!");		
 	});
 	socket.on('cmd', function(cmd) {
 		write2serial(cmd);
@@ -137,6 +238,8 @@ io.sockets.on('connection', function (socket) {
 		if (tokenDevice.indexOf(token) == -1) 
 			tokenDevice.push(token);
 		console.log(tokenDevice);
+		if (sendLCDMessage)
+			sendLCDMessage("New device (#" + tokenDevice.indexOf(token) + ")");
 	});
 	
 	socket.emit("settings", argv);
@@ -144,7 +247,7 @@ io.sockets.on('connection', function (socket) {
 
 server.listen(9090);
 siofu.listen(server);
-console.log('Server runing port 9090');
+
 
 function sendQueue(socket) {
 	socket = socket || io.sockets;
@@ -165,13 +268,15 @@ function finish() {
 	console.log('finish');
 	io.sockets.emit('finish');
 	sendPushNotification("I have just finished my job! ^-^");
+	if (sendLCDMessage)
+		sendLCDMessage("I have just     finished my job!");
 	stop(false);
 }
 
 function stop(sendPush) {
 	write2serial("M5");
 	write2serial("g0x0y0z0");
-	sendPush = sendPush || true;
+	sendPush = (sendPush != undefined) ? sendPush : true;
 	machineRunning	= false;
 	machinePause	= true;
 	timer2			= 0;
@@ -265,22 +370,27 @@ function sendFirstGCodeLine() {
 	command = phpjs.strtoupper(command);
 	
 	
+	
+	
 	//write command to grbl
 	write2serial(command + "");
 	
 	
 	// send gcode command to client
 	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length}, timer2);
-	currentQueue++;	
 	
 	//get X and Y position from the command to count the length that the machine has run
 	var commandX = getPosFromCommand('X', command);
 	var commandY = getPosFromCommand('Y', command);
 	if (commandX != undefined && commandY != undefined) { //if exist x or y coordinate.
 		var newPos = new Vec2(phpjs.floatval(commandX), phpjs.floatval(commandY));
-		currentDistance += newPos.distance(goalPos);
 		goalPos = newPos;
+		currentDistance += newPos.distance(goalPos);
 	}
+	
+	currentQueue++;	
+	
+	
 		
 	return true;
 }
@@ -313,7 +423,8 @@ function receiveData(data) {
 		if (is_running())
 			sendGcodeFromQueue();
 	} else if (data.indexOf('error') > -1) {
-		io.sockets.emit('error', {id: 2, message: data});
+		if (data.indexOf(':24') == -1)
+			io.sockets.emit('error', {id: 2, message: data});
 	} else {
 		io.sockets.emit('data', data);
 	}
@@ -387,3 +498,5 @@ var AT_interval4 = setInterval(function() {
 		'tempGalileo'	: tempGalileo
 	});
 }, intervalTime4);
+
+console.log('Server runing port 9090');
