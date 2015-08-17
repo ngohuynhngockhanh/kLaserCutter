@@ -52,18 +52,27 @@ var	gcodeQueue	= 	[],
 	ipAddress,
 	newConnection,								//implement
 	sendLCDMessage,
+	serverLog,
+	tempGalileo,
+	fan,
+	relay,
+	lcdBusy 	= false,
 	relayStepperVoltagePin	= 6,
+	fanPin		=	7,
 	relayStepperStatus		= 1,
+	minCPUTemp	=	67,
+	maxCPUTemp	=	82,
 	machineRunning=	false,
 	machinePause=	true,
 	laserPos	=	new Vec2(0, 0),
-	goalPos		=	laserPos,
+	goalPos		=	new Vec2(0, 0),
 	minDistance	=	7,							//7mm
 	intervalTime1	=	argv.intervalTime1 || 10000,	//10s = 10000ms. Each 10s, we check grbl status once
 	intervalTime2	=	argv.intervalTime2 || 10000,	//10s = 10000ms. Each 10s, we check camera status once
 	intervalTime3	= 	argv.intervalTime3 || 800,		//check current laser after 800ms
 	intervalTime4	=	argv.intervalTime4 || 30000,	//30s = 30000ms. Each 30s, we check server load once
-	intervalTime5	=	argv.intervalTime5 || 60;		//60s. Each 1 minute, we check grbl status to change to power saving mode
+	intervalTime5	=	argv.intervalTime5 || 60,		//60s. Each 1 minute, we check grbl status to change to power saving mode
+	intervalTime6	=	argv.intervalTime6 || 10000;
 //argv
 	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
 	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
@@ -74,7 +83,13 @@ var	gcodeQueue	= 	[],
 
 board.on("ready", function() {
 	board.digitalWrite(relayStepperVoltagePin, relayStepperStatus); // turn on relay to test 
-
+	
+	relay = new five.Relay(relayStepperVoltagePin);
+	relay.on();
+	
+	fan = new five.Relay(fanPin);
+	fan.off();
+	
 	var lcdTimeout;
 	
 	var lcd = new five.LCD({
@@ -108,24 +123,23 @@ board.on("ready", function() {
 	}
 	function setLCDTimeout(func, timeout) {
 		killLCDTimeout();
-		lcdTimeout = setTimeout(func, timeout);
+		lcdBusy = true;
+		lcdTimeout = setTimeout(function() {
+			func();
+			lcdBusy = false;
+		}, timeout);
 	}
-	newConnection = function(address) {
-		lcd.clear();
-		lcd.cursor(0, 0).print(phpjs.sprintf("Connection(s):%02d", socketClientCount));
-		lcd.cursor(1, 0).print(phpjs.trim(address));
-		lcd.backlight();
-		setLCDTimeout(function() {
-			lcd.noBacklight();
-		}, 10000);
-	}
-	sendLCDMessage = function(message, timeout) {
-		timeout = timeout || 20000;
+	
+	sendLCDMessage = function(message, options) {
+		options = options || {};
+		options.timeout = options.timeout || 20000;
+		options.backlight = (options.backlight != undefined) ? options.backlight : true;
 		console.log(message);
 		var length = phpjs.strlen(message);
-		var tryDraw = function(idx, length) {
+		var tryDraw = function(idx, length, options) {
 			lcd.clear();
-			lcd.backlight();
+			if (options.backlight)
+				lcd.backlight();
 			for (var i = 0; i < 16 * 2; i++) {
 				var x = phpjs.intval(i / 16);
 				var y = i % 16;
@@ -135,15 +149,18 @@ board.on("ready", function() {
 				if (idx == length) {
 					setLCDTimeout(function() {
 						lcd.noBacklight();
-					}, timeout);
+					}, options.timeout);
 					return;
 				}
 			}
 			setLCDTimeout(function() {
-				tryDraw(idx, length);
+				tryDraw(idx, length, options);
 			}, 1000);
 		}
-		tryDraw(0, length);
+		tryDraw(0, length, options);
+	}
+	newConnection = function(address) {
+		sendLCDMessage(phpjs.sprintf("Connection(s):%02d%s", socketClientCount, phpjs.trim(address)));
 	}
 });
 
@@ -281,6 +298,8 @@ function stop(sendPush) {
 	machinePause	= true;
 	timer2			= 0;
 	gcodeQueue 		= gcodeDataQueue.slice(0);
+	currentQueue 	= 0;
+	currentDistance = 0;
 	stopCountingTime();
 	console.log('stop!');
 	if (sendPush)
@@ -351,7 +370,9 @@ function getPosFromCommand(which, command) {
 }
 function sendFirstGCodeLine() {
 	if (gcodeQueue.length == 0) {	// is empty list
-		finish();
+		setTimeout(function() {
+			finish();
+		}, 1000);
 		return false;
 	}
 	
@@ -384,8 +405,8 @@ function sendFirstGCodeLine() {
 	var commandY = getPosFromCommand('Y', command);
 	if (commandX != undefined && commandY != undefined) { //if exist x or y coordinate.
 		var newPos = new Vec2(phpjs.floatval(commandX), phpjs.floatval(commandY));
-		goalPos = newPos;
 		currentDistance += newPos.distance(goalPos);
+		goalPos.set(newPos);
 	}
 	
 	currentQueue++;	
@@ -396,7 +417,7 @@ function sendFirstGCodeLine() {
 }
 
 function sendGcodeFromQueue() {
-	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue <= maxQueue)
+	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue < maxQueue)
 		sendFirstGCodeLine();
 }
 
@@ -404,12 +425,11 @@ function receiveData(data) {
 	if (data.indexOf('<') == 0) {	//type <status,...>
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
-		laserPos = new Vec2(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
+		laserPos.set(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
 		
 		
 		io.sockets.emit('position', data_array, machineRunning, machinePause);
-		
-		if (laserPos.distance(goalPos) < minDistance) {
+		if (laserPos.distance(goalPos) < minDistance || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
 			currentQueue = 0;
 			currentDistance = 0;
 		}
@@ -423,6 +443,7 @@ function receiveData(data) {
 		if (is_running())
 			sendGcodeFromQueue();
 	} else if (data.indexOf('error') > -1) {
+		currentQueue--;
 		if (data.indexOf(':24') == -1)
 			io.sockets.emit('error', {id: 2, message: data});
 	} else {
@@ -491,12 +512,38 @@ var AT_interval2 = setInterval(function() {
 }, intervalTime2);
 
 var AT_interval4 = setInterval(function() {
-	var serverLoad	= sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout;
-	var tempGalileo	= sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout;
+	serverLoad	= phpjs.floatval(sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout);
+	tempGalileo	= phpjs.intval(sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout);
+	if (fan) {
+		if (fan.isOn) {
+			if (tempGalileo <= minCPUTemp) {
+				fan.off();
+			}
+		} else {
+			if (tempGalileo > maxCPUTemp) {
+				fan.on();
+			}
+		}
+	}
 	io.sockets.emit("system_log", {
 		'serverLoad'	: serverLoad,
 		'tempGalileo'	: tempGalileo
 	});
 }, intervalTime4);
+
+var AT_interval6 = setInterval(function() {
+	if (sendLCDMessage && !lcdBusy) {
+		var randomNumber = phpjs.rand(0, 1);
+		switch (randomNumber) {
+			case 0:
+				sendLCDMessage(phpjs.sprintf("X:%14.5fY:%14.5f", laserPos.x, laserPos.y), {backlight: false});
+				break;
+			case 1:
+				sendLCDMessage(phpjs.sprintf("Server Load:%4.2fGalileo   %2d oC", serverLoad, tempGalileo), {backlight: false});
+				break;
+		}
+		
+	}
+}, intervalTime6);
 
 console.log('Server runing port 9090');
