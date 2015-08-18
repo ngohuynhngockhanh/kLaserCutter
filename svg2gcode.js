@@ -37,6 +37,7 @@ var	express		=	require('express'),
 var	gcodeQueue	= 	[],
 	gcodeDataQueue= [],
 	tokenDevice	=	[],
+	rememberTokenDevice = [],
 	SVGcontent	=	"",
 	currentQueue=	0,
 	currentDistance=0,
@@ -48,6 +49,7 @@ var	gcodeQueue	= 	[],
 	timer2		=	0,
 	timer3		=	phpjs.time(),
 	socketClientCount	= 0,
+	copiesDrawing = 1,
 	lcd,
 	ipAddress,
 	newConnection,								//implement
@@ -60,8 +62,8 @@ var	gcodeQueue	= 	[],
 	relayStepperVoltagePin	= 6,
 	fanPin		=	7,
 	relayStepperStatus		= 1,
-	minCPUTemp	=	67,
-	maxCPUTemp	=	82,
+	minCPUTemp	=	73,
+	maxCPUTemp	=	88,
 	machineRunning=	false,
 	machinePause=	true,
 	laserPos	=	new Vec2(0, 0),
@@ -221,8 +223,9 @@ io.sockets.on('connection', function (socket) {
 	socket.on('disconnect', function() {
 		socketClientCount--;
 	});
-	socket.on('start',function(){
-		start();
+	socket.on('start',function(copies){
+		copies = copies || 1;
+		start(copies);
 		if (sendLCDMessage)
 			sendLCDMessage("It's running ^^!Yeah, so cool.");
 	});
@@ -251,10 +254,19 @@ io.sockets.on('connection', function (socket) {
 		write2serial(cmd);
 	});
 	
-	socket.on('token', function(token) {
+	socket.on('token', function(token, remember) {
 		if (tokenDevice.indexOf(token) == -1) 
 			tokenDevice.push(token);
 		console.log(tokenDevice);
+		console.log(remember);
+		var rtdIndex = rememberTokenDevice.indexOf(token);
+		if (rtdIndex == -1 && remember) {
+			rememberTokenDevice.push(token);
+			saveRememberDevice();
+		} else if (!remember && rtdIndex > -1) {
+			rememberTokenDevice.splice(rtdIndex, 1);
+			saveRememberDevice();
+		}
 		if (sendLCDMessage)
 			sendLCDMessage("New device (#" + tokenDevice.indexOf(token) + ")");
 	});
@@ -265,6 +277,16 @@ io.sockets.on('connection', function (socket) {
 server.listen(9090);
 siofu.listen(server);
 
+
+//set token from sdcard
+fs.readFile('./data/rememberDevice.json', function (err, data) {
+	if (err)
+		saveRememberDevice();
+	else {
+		rememberTokenDevice = JSON.parse(data);
+		tokenDevice = rememberTokenDevice.slice(0);
+	}
+});
 
 function sendQueue(socket) {
 	socket = socket || io.sockets;
@@ -310,18 +332,22 @@ function sendPushNotification(message) {
 	var post_data = {
 		"tokens": tokenDevice,
 		"notification":{
-			"alert": message
+			"alert": message 
 		}
 	};
 	var command = "curl -u " + argv.privateApiKey + ": -H \"Content-Type: application/json\" -H \"X-Ionic-Application-Id: " + argv.ionicAppId + "\" https://push.ionic.io/api/v1/push -d '" + JSON.stringify(post_data) + "'";
 	exec(command);
 }
 
-function start() {	
+function start(copies) {	
 	machineRunning	= true;
 	machinePause	= false;
 	console.log("machine is running!");
 	timer2 = phpjs.time();
+	copies = phpjs.intval(copies);
+	if (copies <= 1)
+		copies = 1;
+	copiesDrawing = copies;
 	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
 		gcodeQueue = gcodeDataQueue.slice(0);
 	write2serial("~");
@@ -370,10 +396,13 @@ function getPosFromCommand(which, command) {
 }
 function sendFirstGCodeLine() {
 	if (gcodeQueue.length == 0) {	// is empty list
-		setTimeout(function() {
+		if (copiesDrawing <= 1) {
 			finish();
-		}, 1000);
-		return false;
+			return false;
+		} else {
+			gcodeQueue = gcodeDataQueue.slice(0);
+			copiesDrawing--;
+		}
 	}
 	
 	
@@ -428,8 +457,9 @@ function receiveData(data) {
 		laserPos.set(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
 		
 		
-		io.sockets.emit('position', data_array, machineRunning, machinePause);
-		if (laserPos.distance(goalPos) < minDistance || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
+		io.sockets.emit('position', data_array, machineRunning, machinePause, copiesDrawing);
+		
+		if ((laserPos.distance(goalPos) < minDistance) || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
 			currentQueue = 0;
 			currentDistance = 0;
 		}
@@ -468,7 +498,10 @@ function addQueue(list) {
 	gcodeQueue = list;
 	gcodeDataQueue = list.slice(0);
 }
-
+function saveRememberDevice(list) {
+	list = list || rememberTokenDevice;
+	fs.writeFile('./data/rememberDevice.json', JSON.stringify(list));
+}
 function write2serial(command, func) {
 	if (relayStepperStatus == 0 && command.length > 1) {
 		relayStepperStatus = 1;
@@ -512,7 +545,7 @@ var AT_interval2 = setInterval(function() {
 }, intervalTime2);
 
 var AT_interval4 = setInterval(function() {
-	serverLoad	= phpjs.floatval(sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout);
+	serverLoad	= sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout;
 	tempGalileo	= phpjs.intval(sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout);
 	if (fan) {
 		if (fan.isOn) {
@@ -539,7 +572,7 @@ var AT_interval6 = setInterval(function() {
 				sendLCDMessage(phpjs.sprintf("X:%14.5fY:%14.5f", laserPos.x, laserPos.y), {backlight: false});
 				break;
 			case 1:
-				sendLCDMessage(phpjs.sprintf("Server Load:%4.2fGalileo   %2d oC", serverLoad, tempGalileo), {backlight: false});
+				sendLCDMessage(phpjs.sprintf("Server Load:%4.2fGalileo   %2d oC", phpjs.floatval(serverLoad), tempGalileo), {backlight: false});
 				break;
 		}
 		
