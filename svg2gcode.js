@@ -59,9 +59,8 @@ var	gcodeQueue	= 	[],
 	fan,
 	relay,
 	lcdBusy 	= false,
-	relayStepperVoltagePin	= 6,
+	relayStepperPin	= 6,
 	fanPin		=	7,
-	relayStepperStatus		= 1,
 	minCPUTemp	=	73,
 	maxCPUTemp	=	88,
 	machineRunning=	false,
@@ -80,13 +79,12 @@ var	gcodeQueue	= 	[],
 	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
 	argv.ionicAppId	=	argv.ionicAppId || '46a9aa6b';
 	argv.LCDcontroller = argv.LCDcontroller || "PCF8574";
+	argv.feedRate	=	(argv.feedRate != undefined) ? argv.feedRate : -1;			//-1 means fetch from data
 
 	
 
 board.on("ready", function() {
-	board.digitalWrite(relayStepperVoltagePin, relayStepperStatus); // turn on relay to test 
-	
-	relay = new five.Relay(relayStepperVoltagePin);
+	relay = new five.Relay(relayStepperPin);
 	relay.on();
 	
 	fan = new five.Relay(fanPin);
@@ -251,10 +249,30 @@ io.sockets.on('connection', function (socket) {
 			sendLCDMessage("Stopped!");		
 	});
 	socket.on('cmd', function(cmd) {
+		cmd = cmd || "";
+		cmd = phpjs.str_replace(['"', "'"], '', cmd);
 		write2serial(cmd);
 	});
-	
+	socket.on('feedRate', function(feedRate) {
+		feedRate = phpjs.intval(feedRate);
+		if (feedRate <= 1) feedRate = 1;
+		if (feedRate == argv.feedRate)
+			return;
+		fs.writeFile('./data/feedRate', feedRate);
+		
+		var replaceFeedRate = function(queue) { 
+			var oldF = 'F' + argv.feedRate;
+			var newF = 'F' + feedRate;
+			for (var i = 0; i < queue.length; i++)
+				queue[i] = phpjs.str_replace(oldF, newF, queue[i]);
+		}
+		replaceFeedRate(gcodeQueue);
+		replaceFeedRate(gcodeDataQueue);
+		argv.feedRate = feedRate;
+		io.sockets.emit("settings", argv);
+	});
 	socket.on('token', function(token, remember) {
+		
 		if (tokenDevice.indexOf(token) == -1) 
 			tokenDevice.push(token);
 		console.log(tokenDevice);
@@ -264,7 +282,7 @@ io.sockets.on('connection', function (socket) {
 			rememberTokenDevice.push(token);
 			saveRememberDevice();
 		} else if (!remember && rtdIndex > -1) {
-			rememberTokenDevice.splice(rtdIndex, 1);
+			rememberTokenDevice.slice(rtdIndex, 1);
 			saveRememberDevice();
 		}
 		if (sendLCDMessage)
@@ -287,11 +305,25 @@ fs.readFile('./data/rememberDevice.json', function (err, data) {
 		tokenDevice = rememberTokenDevice.slice(0);
 	}
 });
+if (argv.feedRate == -1) 
+	fs.readFile('./data/feedRate', function (err, data) {
+		if (err)
+			argv.feedRate = 300;
+		else {
+			data = phpjs.str_replace("\n", "", data);
+			console.log(data);
+			argv.feedRate = phpjs.intval(data);
+			if (argv.feedRate <= 1)
+				argv.feedRate = 1;
+		}
+	});
+
+
 
 function sendQueue(socket) {
 	socket = socket || io.sockets;
 	console.log('sendQueue');
-	socket.emit('AllGcode', gcodeDataQueue);
+	socket.emit('AllGcode', gcodeDataQueue, machineRunning);
 	if (SVGcontent != "") {
 		sendSVG(SVGcontent);
 	}
@@ -464,8 +496,13 @@ function receiveData(data) {
 			currentDistance = 0;
 		}
 		if (phpjs.time() - timer3 > intervalTime5) {
-			relayStepperStatus = (data_array[0] == 'Idle') ? 0 : 1;
-			board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
+			if (relay) {
+				if (data_array[0] == 'Idle')
+					relay.off();
+				else 
+					relay.on();
+			}
+			
 			timer3 = phpjs.time();
 		}
 	} else if (data.indexOf('ok') == 0) {
@@ -503,9 +540,8 @@ function saveRememberDevice(list) {
 	fs.writeFile('./data/rememberDevice.json', JSON.stringify(list));
 }
 function write2serial(command, func) {
-	if (relayStepperStatus == 0 && command.length > 1) {
-		relayStepperStatus = 1;
-		board.digitalWrite(relayStepperVoltagePin, relayStepperStatus);
+	if (relay && !relay.isOn && command.length > 1) {
+		relay.on();
 		sleep.sleep(1); //sleep 1 s
 	}
 	command += "\r";
@@ -545,8 +581,9 @@ var AT_interval2 = setInterval(function() {
 }, intervalTime2);
 
 var AT_interval4 = setInterval(function() {
-	serverLoad	= sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout;
+	serverLoad	= phpjs.trim(sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout);
 	tempGalileo	= phpjs.intval(sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout);
+	exec("echo '" + serverLoad + "' >> ./upload/sl.log");
 	if (fan) {
 		if (fan.isOn) {
 			if (tempGalileo <= minCPUTemp) {
