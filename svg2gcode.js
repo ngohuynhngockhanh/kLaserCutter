@@ -54,13 +54,17 @@ var	gcodeQueue	= 	[],
 	ipAddress,
 	newConnection,								//implement
 	sendLCDMessage,
-	serverLog,
+	serverLoad,
 	tempGalileo,
 	fan,
 	relay,
+	greenButton,
+	redButton,
 	lcdBusy 	= false,
 	relayStepperPin	= 6,
 	fanPin		=	7,
+	greenButtonPin	=	8,
+	redButtonPin	=	9,
 	minCPUTemp	=	73,
 	maxCPUTemp	=	88,
 	machineRunning=	false,
@@ -81,41 +85,51 @@ var	gcodeQueue	= 	[],
 	argv.LCDcontroller = argv.LCDcontroller || "PCF8574";
 	argv.feedRate	=	(argv.feedRate != undefined) ? argv.feedRate : -1;			//-1 means fetch from data
 
-	
+var _getIpAddress_idx = 0;
+function getIpAddress() {
+	var ip = phpjs.explode("\n", sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout);
+	console.log(ip);
+	var count = phpjs.count(ip) - 1;
+	if (count == 0)
+		return "";
+	_getIpAddress_idx = (_getIpAddress_idx + 1) % count;
+	return ip[_getIpAddress_idx];
+}	
+
+function shutdown() {
+	sendLCDMessage("Shutting down...Wait 10 seconds!");
+	relay.off();
+	fan.off();
+	console.log("shutdown");
+	sendPushNotification("The machine was shutted down!");
+	sh.exec("shutdown -h now");	
+}
 
 board.on("ready", function() {
+	//relay
 	relay = new five.Relay(relayStepperPin);
 	relay.on();
 	
+	//fan
 	fan = new five.Relay(fanPin);
 	fan.off();
+	
+	//buttons
+	greenButton = new five.Button(greenButtonPin);
+	redButton 	= new five.Button({
+		pin: redButtonPin,
+		holdtime: 3000
+	});
+	
+	
+	
 	
 	var lcdTimeout;
 	
 	var lcd = new five.LCD({
 		controller: argv.LCDcontroller
 	});
-	ipAddress = "";
-	do {
-		ipAddress = sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout;
-		if (phpjs.strlen(ipAddress) > 7) {
-			lcd.clear();
-			lcd.cursor(0, 0).print("IP Address:");
-			lcd.cursor(1, 0).print(phpjs.str_replace("\n", "", ipAddress));
-			lcd.backlight();
-			setLCDTimeout(function() {
-				lcd.noBacklight();
-			}, 30000);
-			break;
-		} else {
-			lcd.clear();
-			for (var i = 5 ; i >= 1; i--) {
-				lcd.cursor(0, 0).print("Wait for IP");
-				lcd.cursor(1, 0).print(".............." + i + "s");
-				sleep.sleep(1);
-			}
-		}
-	} while (phpjs.strlen(ipAddress) > 7);
+	
 	
 	function killLCDTimeout() {
 		if (lcdTimeout)
@@ -162,6 +176,38 @@ board.on("ready", function() {
 	newConnection = function(address) {
 		sendLCDMessage(phpjs.sprintf("Connection(s):%02d%s", socketClientCount, phpjs.trim(address)));
 	}
+	
+	
+	ipAddress = "";
+	do {
+		ipAddress = getIpAddress();
+		if (phpjs.strlen(ipAddress) > 7) {
+			sendLCDMessage("IP Address:     " + ipAddress, {timeout: 30000});
+			break;
+		} else {
+			lcd.clear();
+			lcd.cursor(0, 0).print("Wait for IP");
+			for (var i = 5 ; i >= 1; i--) {				
+				lcd.cursor(1, 0).print(".............." + i + "s");
+				sleep.sleep(1);
+			}
+		}
+	} while (phpjs.strlen(ipAddress) > 7);
+	
+	greenButton.on("hold", function() {
+		sendLCDMessage("IP Address:     " + getIpAddress(), {timeout: 5000});	
+	});
+	redButton.on("down", function() {
+		if (is_running()) {
+			sendLCDMessage("Halt the machine");
+			stop();
+		}
+	});
+	redButton.on("hold", function() {
+		if (!is_running())
+			shutdown();
+	});
+	
 });
 
 //app.use(express.static(__dirname + '/upload'));
@@ -602,7 +648,7 @@ var AT_interval4 = setInterval(function() {
 }, intervalTime4);
 
 var AT_interval6 = setInterval(function() {
-	if (sendLCDMessage && !lcdBusy) {
+	if (ipAddress && ipAddress != "" && sendLCDMessage && !lcdBusy) {
 		var randomNumber = phpjs.rand(0, 1);
 		switch (randomNumber) {
 			case 0:
