@@ -1,5 +1,5 @@
 #!/bin/bash 
-
+DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 process="svg2gcode.js"
 #mount ramdisk
 mount -t tmpfs -o size=10M tmpfs ./../upload/ 
@@ -10,7 +10,7 @@ do
 		echo "Process $process is running"         
 	else        
 		echo "Start SVG2gcode again"
-		cd /home/laser && ./svg2gcode.js > /dev/null 2>&1 &
+		cd $DIR && cd ../ && ./svg2gcode.js > /dev/null 2>&1 &
 	fi
 	sleep 10
 done

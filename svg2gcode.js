@@ -30,7 +30,25 @@ var	express		=	require('express'),
 					parser: serialport.parsers.readline("\n")
 				});
 
-		
+
+//argv
+	argv.minDistance	=	argv.minDistance	|| 6;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
+	argv.maxDistance	=	argv.maxDistance	|| 8;							//queue is full if the distance they went enough 8mm or more one comand
+	argv.minQueue		=	argv.minQueue		|| 4;							//queue has at least 5 elements
+	argv.maxQueue		=	argv.maxQueue		|| 20;							//queue has at maximum 20 elements
+	argv.minCPUTemp		=	argv.minCPUTemp		|| 73;							// if galileo temp <= this => turn the fan off
+	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 88;							// if galileo temp > this => turn the fan on
+	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
+	argv.intervalTime2	=	argv.intervalTime2	|| 10000;						//10s = 10000ms. Each 10s, we check camera status once
+	argv.intervalTime3	= 	argv.intervalTime3	|| 800;							//check current laser after 800ms
+	argv.intervalTime4	=	argv.intervalTime4	|| 30000;						//30s = 30000ms. Each 30s, we check server load once
+	argv.intervalTime5	=	argv.intervalTime5	|| 60;							//60s. Each 1 minute, we check grbl status to change to power saving mode
+	argv.intervalTime6	=	argv.intervalTime6	|| 10000;						//10s. Each 10 seconds, we update Server log/ Galileo temperature OR Laser position once.
+	argv.maxFileSize 	= 	argv.maxFileSize	|| 1.5 * 1024 * 1024;			//unit: byte
+	argv.privateApiKey 	= 	argv.privateApiKey 	|| '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';		//privateApiKey (Ionic App), create your own or use my own
+	argv.ionicAppId		=	argv.ionicAppId 	|| '46a9aa6b';												//ionic app id (ionic app), create your own or use my own
+	argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
+	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
 				
 
 				
@@ -41,49 +59,46 @@ var	gcodeQueue	= 	[],
 	SVGcontent	=	"",
 	currentQueue=	0,
 	currentDistance=0,
-	maxDistance	=	8,							//queue has enough elements to run enough 8mm
-	minQueue	=	4,							// queue has at least 5 elements
-	maxQueue    =	20,							//queue has at maximum 20 elements
+	minDistance	=	phpjs.intval(argv.minDistance),		
+	maxDistance	=	phpjs.intval(argv.maxDistance),							
+	minQueue	=	phpjs.intval(argv.minQueue),							
+	maxQueue    =	phpjs.intval(argv.maxQueue),							
 	timer1		=	phpjs.time(),
 	timer2		=	phpjs.time(),
 	timer2		=	0,
 	timer3		=	phpjs.time(),
 	socketClientCount	= 0,
-	copiesDrawing = 1,
+	copiesDrawing 		= 1,
+	lcdBusy 	= false,
+	//galileo pinout
+	relayStepperPin		= 	6,
+	fanPin				=	7,
+	greenButtonPin		=	8,
+	redButtonPin		=	9,
+	minCPUTemp	=	phpjs.intval(argv.minCPUTemp),
+	maxCPUTemp	=	phpjs.intval(argv.maxCPUTemp),
+	machineRunning		=	false,
+	machinePause		=	true,
+	laserPos	=	new Vec2(0, 0),
+	goalPos		=	new Vec2(0, 0),
+	intervalTime1		=	phpjs.intval(argv.intervalTime1),
+	intervalTime2		=	phpjs.intval(argv.intervalTime2),
+	intervalTime3		= 	phpjs.intval(argv.intervalTime3),
+	intervalTime4		=	phpjs.intval(argv.intervalTime4),
+	intervalTime5		=	phpjs.intval(argv.intervalTime5),
+	intervalTime6		=	phpjs.intval(argv.intervalTime6),
+	//implement
 	lcd,
 	ipAddress,
-	newConnection,								//implement
+	newConnection,								
 	sendLCDMessage,
 	serverLoad,
 	tempGalileo,
 	fan,
 	relay,
 	greenButton,
-	redButton,
-	lcdBusy 	= false,
-	relayStepperPin	= 6,
-	fanPin		=	7,
-	greenButtonPin	=	8,
-	redButtonPin	=	9,
-	minCPUTemp	=	73,
-	maxCPUTemp	=	88,
-	machineRunning=	false,
-	machinePause=	true,
-	laserPos	=	new Vec2(0, 0),
-	goalPos		=	new Vec2(0, 0),
-	minDistance	=	7,							//7mm
-	intervalTime1	=	argv.intervalTime1 || 10000,	//10s = 10000ms. Each 10s, we check grbl status once
-	intervalTime2	=	argv.intervalTime2 || 10000,	//10s = 10000ms. Each 10s, we check camera status once
-	intervalTime3	= 	argv.intervalTime3 || 800,		//check current laser after 800ms
-	intervalTime4	=	argv.intervalTime4 || 30000,	//30s = 30000ms. Each 30s, we check server load once
-	intervalTime5	=	argv.intervalTime5 || 60,		//60s. Each 1 minute, we check grbl status to change to power saving mode
-	intervalTime6	=	argv.intervalTime6 || 10000;
-//argv
-	argv.maxFileSize = argv.maxFileSize || 1.5 * 1024 * 1024;
-	argv.privateApiKey = argv.privateApiKey || '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';
-	argv.ionicAppId	=	argv.ionicAppId || '46a9aa6b';
-	argv.LCDcontroller = argv.LCDcontroller || "PCF8574";
-	argv.feedRate	=	(argv.feedRate != undefined) ? argv.feedRate : -1;			//-1 means fetch from data
+	redButton;
+
 
 var _getIpAddress_idx = 0;
 function getIpAddress() {
@@ -97,12 +112,14 @@ function getIpAddress() {
 }	
 
 function shutdown() {
+	sendPushNotification("The machine was shutted down!");
 	sendLCDMessage("Shutting down...Wait 10 seconds!");
 	relay.off();
 	fan.off();
 	console.log("shutdown");
-	sendPushNotification("The machine was shutted down!");
-	sh.exec("shutdown -h now");	
+	setTimeout(function() {
+		sh.exec("shutdown -h now");	
+	}, 1000);
 }
 
 board.on("ready", function() {
@@ -198,14 +215,25 @@ board.on("ready", function() {
 		sendLCDMessage("IP Address:     " + getIpAddress(), {timeout: 5000});	
 	});
 	redButton.on("down", function() {
-		if (is_running()) {
-			sendLCDMessage("Halt the machine");
-			stop();
+		if (machineRunning) {
+			if (machinePause) {
+				sendLCDMessage("Resuming...");
+				unpause();
+			} else {
+				sendLCDMessage("Pause");
+				pause();
+			}
 		}
 	});
 	redButton.on("hold", function() {
-		if (!is_running())
+		if (!machineRunning) {
+			if (machinePause)
+				start();
 			shutdown();
+		} else {
+			sendLCDMessage("Halt the machine");
+			stop();
+		}
 	});
 	
 });
@@ -318,8 +346,8 @@ io.sockets.on('connection', function (socket) {
 		io.sockets.emit("settings", argv);
 	});
 	socket.on('token', function(token, remember) {
-		
-		if (tokenDevice.indexOf(token) == -1) 
+		tokenIndexOf = tokenDevice.indexOf(token);
+		if (tokenIndexOf == -1) 
 			tokenDevice.push(token);
 		console.log(tokenDevice);
 		console.log(remember);
@@ -332,7 +360,7 @@ io.sockets.on('connection', function (socket) {
 			saveRememberDevice();
 		}
 		if (sendLCDMessage)
-			sendLCDMessage("New device (#" + tokenDevice.indexOf(token) + ")");
+			sendLCDMessage((tokenIndexOf == -1 ? "New" : "Old") + " device (#" + tokenDevice.indexOf(token) + ")");
 	});
 	
 	socket.emit("settings", argv);
@@ -461,8 +489,9 @@ function sendCommand(command) {
 	if (is_running())
 		console.log("this machine is running, so you can't execute any command");
 	else {
+		command = phpjs.strval(command);
 		console.log("send command " + command);
-		write2serial(command + "");
+		write2serial((command));
 	}
 }
 
@@ -493,16 +522,12 @@ function sendFirstGCodeLine() {
 	//if command is just a command, we check again
 	if (phpjs.strlen(command) <= 1 || command.indexOf(";") == 0)   //igrone comment line
 		return sendFirstGCodeLine();
-		
-	//convert command to upper style
-	command = phpjs.strtoupper(command);
-	
-	
-	
 	
 	//write command to grbl
-	write2serial(command + "");
+	write2serial(command);
 	
+	//convert command to upper style
+	command = phpjs.strtoupper(command);
 	
 	// send gcode command to client
 	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length}, timer2);
