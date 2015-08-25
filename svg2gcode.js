@@ -23,7 +23,6 @@ var	express		=	require('express'),
 					debug: false,
 				}),
 	MJPG_Streamer=	require('./lib/mjpg_streamer'),
-	mjpg_streamer=  new MJPG_Streamer(),
 	SerialPort	= 	serialport.SerialPort,	
 	serialPort	= 	new SerialPort("/dev/ttyS0", {
 					baudrate: 115200,
@@ -32,6 +31,7 @@ var	express		=	require('express'),
 
 
 //argv
+	argv.serverPort		=	argv.serverPort		|| 9090;						//kLaserCutter Server nodejs port
 	argv.minDistance	=	argv.minDistance	|| 6;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
 	argv.maxDistance	=	argv.maxDistance	|| 8;							//queue is full if the distance they went enough 8mm or more one comand
 	argv.minQueue		=	argv.minQueue		|| 4;							//queue has at least 5 elements
@@ -49,8 +49,17 @@ var	express		=	require('express'),
 	argv.ionicAppId		=	argv.ionicAppId 	|| '46a9aa6b';												//ionic app id (ionic app), create your own or use my own
 	argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
 	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
-				
+	argv.mjpg			=	(argv.mjpg != undefined) ? JSON.parse(argv.mjpg) : {
+								"port"			:	8080,
+								"resolution"	:	"320x240",
+								"fps"			:	"5",
+								"quality"		:	"50",
+								"format"		:	"auto"
+							};
 
+//mjpeg options log				
+console.log("MJPG options: ");
+console.log(argv.mjpg);
 				
 var	gcodeQueue	= 	[],
 	gcodeDataQueue= [],
@@ -81,13 +90,14 @@ var	gcodeQueue	= 	[],
 	machinePause		=	true,
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	new Vec2(0, 0),
+	mjpg_streamer=  new MJPG_Streamer(argv.mjpg),
 	intervalTime1		=	phpjs.intval(argv.intervalTime1),
 	intervalTime2		=	phpjs.intval(argv.intervalTime2),
 	intervalTime3		= 	phpjs.intval(argv.intervalTime3),
 	intervalTime4		=	phpjs.intval(argv.intervalTime4),
 	intervalTime5		=	phpjs.intval(argv.intervalTime5),
 	intervalTime6		=	phpjs.intval(argv.intervalTime6),
-	//implement
+	//implement	
 	lcd,
 	ipAddress,
 	newConnection,								
@@ -228,9 +238,10 @@ board.on("ready", function() {
 	redButton.on("hold", function() {
 		if (!machineRunning) {
 			if (machinePause)
-				start();
+				unpause();
 			shutdown();
 		} else {
+			unpause();
 			sendLCDMessage("Halt the machine");
 			stop();
 		}
@@ -366,7 +377,7 @@ io.sockets.on('connection', function (socket) {
 	socket.emit("settings", argv);
 });
 
-server.listen(9090);
+server.listen(argv.serverPort);
 siofu.listen(server);
 
 
