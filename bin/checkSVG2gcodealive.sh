@@ -3,6 +3,8 @@ DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 process="svg2gcode.js"
 #mount ramdisk
 mount -t tmpfs -o size=10M tmpfs ./../upload/ 
+#insmod sha1_generic
+cd $DIR && cd kernel && insmod sha1_generic.ko
 while true;
 do
 	if ps | grep -v grep | grep $process > /dev/null         

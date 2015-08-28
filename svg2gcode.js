@@ -112,7 +112,8 @@ var	gcodeQueue	= 	[],
 
 var _getIpAddress_idx = 0;
 function getIpAddress() {
-	var ip = phpjs.explode("\n", sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout);
+	var ip = sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout;	
+	ip = phpjs.explode("\n", ip);
 	console.log(ip);
 	var count = phpjs.count(ip) - 1;
 	if (count == 0)
@@ -431,7 +432,8 @@ function finish() {
 
 function stop(sendPush) {
 	write2serial("M5");
-	write2serial("g0x0y0z0");
+	write2serial("g0x0y0");
+	goalPos.set(0, 0);
 	sendPush = (sendPush != undefined) ? sendPush : true;
 	machineRunning	= false;
 	machinePause	= true;
@@ -551,17 +553,21 @@ function sendFirstGCodeLine() {
 		currentDistance += newPos.distance(goalPos);
 		goalPos.set(newPos);
 	}
-	
-	currentQueue++;	
-	
+	 
+	if (command.indexOf("M") == -1) 
+		currentQueue++;	
+	else
+		sendFirstGCodeLine();
 	
 		
 	return true;
 }
 
 function sendGcodeFromQueue() {
-	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue < maxQueue)
+	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue < maxQueue) {
 		sendFirstGCodeLine();
+		sendFirstGCodeLine();
+	}
 }
 
 function receiveData(data) {
@@ -572,7 +578,7 @@ function receiveData(data) {
 		
 		
 		io.sockets.emit('position', data_array, machineRunning, machinePause, copiesDrawing);
-		
+		console.log(currentQueue + " " + laserPos.distance(goalPos) + " " + minDistance);
 		if ((laserPos.distance(goalPos) < minDistance) || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
 			currentQueue = 0;
 			currentDistance = 0;
@@ -626,7 +632,8 @@ function write2serial(command, func) {
 		relay.on();
 		sleep.sleep(1); //sleep 1 s
 	}
-	command += "\r";
+	command += "\n";
+	console.log(command);
 	if (func) 
 		serialPort.write(command, func);
 	else 
