@@ -17,6 +17,16 @@ update-rc.d $auto_script_filename defaults
 echo "Install ppp_mppe kernel support!"
 opkg install $path/bin/kernel/kernel-module-ppp-mppe_3.8-r0_quark.ipk
 
+
+#install pptpclient
+wget "http://k1.arduino.vn/img/2015/08/28/0/1561_123450-1440778374-0-pptp-1.8.0.zip" -O pptp.zip
+unzip pptp.zip
+cd pptp* && make 
+make clean && make && make install && cd ..
+rm pptp* -rf
+echo ""
+echo ""
+echo ""
 echo "You're done!"
 echo "Now run ./svg2gcode.js to run the server (kLaserCuter)."
 echo "From now, your kLaserCutter copy will be started as startup."
