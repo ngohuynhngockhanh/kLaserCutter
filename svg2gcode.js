@@ -34,7 +34,7 @@ var	express		=	require('express'),
 	argv.serverPort		=	argv.serverPort		|| 9090;						//kLaserCutter Server nodejs port
 	argv.minDistance	=	argv.minDistance	|| 6;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
 	argv.maxDistance	=	argv.maxDistance	|| 8;							//queue is full if the distance they went enough 8mm or more one comand
-	argv.minQueue		=	argv.minQueue		|| 4;							//queue has at least 5 elements
+	argv.minQueue		=	argv.minQueue		|| 7;							//queue has at least 5 elements
 	argv.maxQueue		=	argv.maxQueue		|| 20;							//queue has at maximum 20 elements
 	argv.minCPUTemp		=	argv.minCPUTemp		|| 73;							// if galileo temp <= this => turn the fan off
 	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 88;							// if galileo temp > this => turn the fan on
@@ -351,6 +351,8 @@ io.sockets.on('connection', function (socket) {
 			var newF = 'F' + feedRate;
 			for (var i = 0; i < queue.length; i++)
 				queue[i] = phpjs.str_replace(oldF, newF, queue[i]);
+				
+			write2serial(phpjs.sprintf("G01 F%.1f", phpjs.floatval(feedRate)));
 		}
 		replaceFeedRate(gcodeQueue);
 		replaceFeedRate(gcodeDataQueue);
@@ -431,6 +433,7 @@ function finish() {
 }
 
 function stop(sendPush) {
+	write2serial("~");
 	write2serial("M5");
 	write2serial("g0x0y0");
 	goalPos.set(0, 0);
@@ -535,7 +538,7 @@ function sendFirstGCodeLine() {
 	//if command is just a command, we check again
 	if (phpjs.strlen(command) <= 1 || command.indexOf(";") == 0)   //igrone comment line
 		return sendFirstGCodeLine();
-	
+	command = phpjs.trim(command.replace(/[^a-zA-Z0-9-.$]/g, ''));
 	//write command to grbl
 	write2serial(command);
 	
@@ -553,19 +556,12 @@ function sendFirstGCodeLine() {
 		currentDistance += newPos.distance(goalPos);
 		goalPos.set(newPos);
 	}
-	 
-	if (command.indexOf("M") == -1) 
-		currentQueue++;	
-	else
-		sendFirstGCodeLine();
-	
-		
+	currentQueue++;	
 	return true;
 }
 
 function sendGcodeFromQueue() {
 	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue < maxQueue) {
-		sendFirstGCodeLine();
 		sendFirstGCodeLine();
 	}
 }
@@ -578,10 +574,14 @@ function receiveData(data) {
 		
 		
 		io.sockets.emit('position', data_array, machineRunning, machinePause, copiesDrawing);
-		console.log(currentQueue + " " + laserPos.distance(goalPos) + " " + minDistance);
+		//console.log(currentQueue + " " + laserPos.distance(goalPos) + " " + minDistance);
 		if ((laserPos.distance(goalPos) < minDistance) || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
 			currentQueue = 0;
 			currentDistance = 0;
+		} 
+		if (!machinePause && data_array[0] == 'Hold') {
+			unpause();
+			sendGcodeFromQueue();
 		}
 		if (phpjs.time() - timer3 > intervalTime5) {
 			if (relay) {
@@ -632,12 +632,14 @@ function write2serial(command, func) {
 		relay.on();
 		sleep.sleep(1); //sleep 1 s
 	}
-	command += "\n";
-	console.log(command);
-	if (func) 
+	//console.log(command);
+	if (func) {
 		serialPort.write(command, func);
-	else 
+		serialPort.write("\n");
+	} else {
 		serialPort.write(command);
+		serialPort.write("\n");
+	}
 }
 
 serialPort.on("open", function (error) {
