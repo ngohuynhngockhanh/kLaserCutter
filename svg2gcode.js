@@ -10,7 +10,9 @@ var	express		=	require('express'),
 	phpjs		= 	require('phpjs'),
 	Infinity	=	1e90,
 	exec 		=	require('child_process').exec,
+	Jimp		=	require('jimp'),
 	svg2gcode	=	require('./lib/svg2gcode'),
+	pic2gcode	=	require('./lib/pic2gcode'),
 	serialport	=	require("serialport"),
 	Vec2		=	require('vec2'),
 	sleep		=	require('sleep'),
@@ -40,7 +42,7 @@ var	express		=	require('express'),
 	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 88;							// if galileo temp > this => turn the fan on
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
 	argv.intervalTime2	=	argv.intervalTime2	|| 10000;						//10s = 10000ms. Each 10s, we check camera status once
-	argv.intervalTime3	= 	argv.intervalTime3	|| 800;							//check current laser after 800ms
+	argv.intervalTime3	= 	argv.intervalTime3	|| 700;							//check current laser after 600ms
 	argv.intervalTime4	=	argv.intervalTime4	|| 30000;						//30s = 30000ms. Each 30s, we check server load once
 	argv.intervalTime5	=	argv.intervalTime5	|| 60;							//60s. Each 1 minute, we check grbl status to change to power saving mode
 	argv.intervalTime6	=	argv.intervalTime6	|| 10000;						//10s. Each 10 seconds, we update Server log/ Galileo temperature OR Laser position once.
@@ -49,6 +51,7 @@ var	express		=	require('express'),
 	argv.ionicAppId		=	argv.ionicAppId 	|| '46a9aa6b';												//ionic app id (ionic app), create your own or use my own
 	argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
 	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
+	argv.resolution		=	argv.resolution		|| 3.54328571429;				//pic2gcode (picture 2 gcode) resolution
 	argv.mjpg			=	(argv.mjpg != undefined) ? JSON.parse(argv.mjpg) : {
 								"port"			:	8080,
 								"resolution"	:	"320x240",
@@ -271,6 +274,13 @@ io.sockets.on('connection', function (socket) {
 		}
 	});
 	 // Do something when a file is saved:
+	var __upload_complete = function(file, content, filepath) {
+		addQueue(content);
+		sendQueue();
+		fs.unlink(filepath);
+		if (sendLCDMessage)
+			sendLCDMessage("Upload completed" + file.name);
+	}
     uploader.on("complete", function(event){
 		console.log("upload complete");
         var file = event.file;
@@ -281,22 +291,39 @@ io.sockets.on('connection', function (socket) {
 			ext = phpjs.strtolower(ext);
 		
 		setTimeout(function() {
-			var content = fs.readFileSync(filepath).toString();
-			SVGcontent = content;
+			SVGcontent = "";
+			var content = fs.readFileSync(filepath);			
 			var isGCODEfile = (ext == 'gcode' || ext == 'sd' || ext == 'txt');
+			var isPICfile = (ext == 'jpg' || ext == 'jpeg' || ext == 'bmp' || ext == 'png');
 			var options = argv;
 			socket.emit("percent");	
 			console.log(filepath);
-			if (!isGCODEfile)
-				content = svg2gcode.svg2gcode(content, options);
-			
-			if (ext != 'svg')
-				SVGcontent = "";
-			addQueue(content);
-			sendQueue();
-			fs.unlink(filepath);
-			if (sendLCDMessage)
-				sendLCDMessage("Upload completed" + file.name);
+			if (isPICfile) {
+				var image = new Jimp(content, function(e, image) {
+					if (e) {
+						return false;
+						fs.unlink(filepath);
+					}
+					content = pic2gcode.pic2gcode(image, options, function(i, height) {
+						percent = i / height * 90;
+						console.log(percent);
+						socket.emit("percent", percent);
+					});
+					__upload_complete(file, content, filepath);
+				});
+			} else {
+				if (!isGCODEfile) {
+					SVGcontent = content.toString();
+					content = svg2gcode.svg2gcode(SVGcontent, options, function(percent) {
+						
+					});
+				} else 
+					content = content.toString();
+				if (ext != 'svg')
+					SVGcontent = "";
+				
+				__upload_complete(file, content, filepath);
+			}
 		}, file.size / 1024 / 2);
 		
     });
@@ -578,6 +605,9 @@ function receiveData(data) {
 		if ((laserPos.distance(goalPos) < minDistance) || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
 			currentQueue = 0;
 			currentDistance = 0;
+			
+			if (data_array[0] == 'Idle' && is_running()) 
+				sendGcodeFromQueue();
 		} 
 		if (!machinePause && data_array[0] == 'Hold') {
 			unpause();
