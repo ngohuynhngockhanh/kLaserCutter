@@ -1,0 +1,3 @@
+ g++ img_size.cpp `pkg-config opencv --cflags --libs` -o img_size
+
+ I am successfully able to compile my .cpp when I remove "-lopencv_ts" from  /usr/lib/pkgconfig/opencv.pc

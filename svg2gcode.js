@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const px2mm 	=	3.54328571429;
 //require
 var	express		=	require('express'),
 	siofu 		= 	require("socketio-file-upload")
@@ -53,7 +54,7 @@ var	express		=	require('express'),
 	argv.ionicAppId		=	argv.ionicAppId 	|| '46a9aa6b';												//ionic app id (ionic app), create your own or use my own
 	argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
 	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
-	argv.resolution		=	argv.resolution		|| 3.54328571429;				//pic2gcode (picture 2 gcode) resolution
+	argv.resolution		=	argv.resolution		|| px2mm;				//pic2gcode (picture 2 gcode) resolution
 	argv.mjpg			=	(argv.mjpg != undefined) ? JSON.parse(argv.mjpg) : {
 								"port"			:	8080,
 								"resolution"	:	"320x240",
@@ -307,24 +308,32 @@ io.sockets.on('connection', function (socket) {
 			var options = argv;			
 			console.log(filepath);
 			if (isPICfile) {
-				var image = new Jimp(filepath, function(e, image) {
-					if (e) {
-						return false;
-						fs.unlink(filepath);
-					}
-					
-					var check = pic2gcode.pic2gcode(image, options, {
-						percent:	function(percent) {
-							socket.emit("percent", percent);
-						},
-						complete: function(gcode) {
-							__upload_complete(file, gcode, filepath, true);
-						},
-						error: function(message) {
-							console.log(message);
-						}
+				var imageSize = phpjs.explode("x", sh.exec('./bin/img_size/img_size ' + filepath).stdout);
+				var width = phpjs.intval(imageSize[0]) / px2mm;
+				var height = phpjs.intval(imageSize[1]) / px2mm;
+				console.log(width);
+				console.log(height);
+				if (width > argv.maxCoorX || height > argv.maxCoorY || width == 0 || height == 0) {
+					io.sockets.emit('error', {
+						id: 4,
+						message: phpjs.sprintf('Only accept size less than %d x %d (px x px)', argv.maxCoorX * px2mm, argv.maxCoorY * px2mm)
 					});
-				});
+				} else {
+					var image = new Jimp(filepath, function(e, image) {
+						if (e) {
+							return false;
+							fs.unlink(filepath);
+						}
+						var check = pic2gcode.pic2gcode(image, options, {
+							percent:	function(percent) {
+								socket.emit("percent", percent);
+							},
+							complete: function(gcode) {
+								__upload_complete(file, gcode, filepath, true);
+							}
+						});
+					});
+				}
 			} else {
 				var content = fs.readFileSync(filepath);
 				socket.emit("percent");	
