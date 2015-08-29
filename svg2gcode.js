@@ -40,6 +40,8 @@ var	express		=	require('express'),
 	argv.maxQueue		=	argv.maxQueue		|| 20;							//queue has at maximum 20 elements
 	argv.minCPUTemp		=	argv.minCPUTemp		|| 73;							// if galileo temp <= this => turn the fan off
 	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 88;							// if galileo temp > this => turn the fan on
+	argv.maxCoorX		=	argv.maxCoorX		|| 320;							// your max X coordinate 
+	argv.maxCoorY		=	argv.maxCoorY		|| 315;							// your max Y coordinate
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
 	argv.intervalTime2	=	argv.intervalTime2	|| 10000;						//10s = 10000ms. Each 10s, we check camera status once
 	argv.intervalTime3	= 	argv.intervalTime3	|| 700;							//check current laser after 600ms
@@ -91,6 +93,8 @@ var	gcodeQueue	= 	[],
 	maxCPUTemp	=	phpjs.intval(argv.maxCPUTemp),
 	machineRunning		=	false,
 	machinePause		=	true,
+	canSendImage		=	false,
+	imagePath			=	'',
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	new Vec2(0, 0),
 	mjpg_streamer=  new MJPG_Streamer(argv.mjpg),
@@ -253,7 +257,7 @@ board.on("ready", function() {
 	
 });
 
-//app.use(express.static(__dirname + '/upload'));
+app.use('/upload', express.static(__dirname + '/upload'));
 	
 io.sockets.on('connection', function (socket) {
 	socketClientCount++;
@@ -266,6 +270,7 @@ io.sockets.on('connection', function (socket) {
     uploader.listen(socket);
 	uploader.on("start", function(event) {
 		console.log("upload task starts");
+		pic2gcode.clear();
 		var file = event.file;
 		var fileSize = file.size;
 		if (fileSize > argv.maxFileSize) {
@@ -274,16 +279,20 @@ io.sockets.on('connection', function (socket) {
 		}
 	});
 	 // Do something when a file is saved:
-	var __upload_complete = function(file, content, filepath) {
+	var __upload_complete = function(file, content, filepath, isPic) {
 		addQueue(content);
-		sendQueue();
-		fs.unlink(filepath);
+		if (!isPic) {
+			sendQueue();
+			fs.unlink(filepath);
+		} else
+			sendImage(socket, filepath);
 		if (sendLCDMessage)
 			sendLCDMessage("Upload completed" + file.name);
 	}
     uploader.on("complete", function(event){
 		console.log("upload complete");
         var file = event.file;
+		sh.exec("cd ./upload && find ! -name '" + phpjs.str_replace(['\\', "'", 'upload/'], '', file.pathName) + "' -type f -exec rm -f {} +");		
 		var filepath = './' + file.pathName;
 		var re = /(?:\.([^.]+))?$/;
 		var ext = re.exec(filepath)[1];
@@ -292,26 +301,33 @@ io.sockets.on('connection', function (socket) {
 		
 		setTimeout(function() {
 			SVGcontent = "";
-			var content = fs.readFileSync(filepath);			
 			var isGCODEfile = (ext == 'gcode' || ext == 'sd' || ext == 'txt');
 			var isPICfile = (ext == 'jpg' || ext == 'jpeg' || ext == 'bmp' || ext == 'png');
-			var options = argv;
-			socket.emit("percent");	
+			canSendImage = isPICfile;
+			var options = argv;			
 			console.log(filepath);
 			if (isPICfile) {
-				var image = new Jimp(content, function(e, image) {
+				var image = new Jimp(filepath, function(e, image) {
 					if (e) {
 						return false;
 						fs.unlink(filepath);
 					}
-					content = pic2gcode.pic2gcode(image, options, function(i, height) {
-						percent = i / height * 90;
-						console.log(percent);
-						socket.emit("percent", percent);
+					
+					var check = pic2gcode.pic2gcode(image, options, {
+						percent:	function(percent) {
+							socket.emit("percent", percent);
+						},
+						complete: function(gcode) {
+							__upload_complete(file, gcode, filepath, true);
+						},
+						error: function(message) {
+							console.log(message);
+						}
 					});
-					__upload_complete(file, content, filepath);
 				});
 			} else {
+				var content = fs.readFileSync(filepath);
+				socket.emit("percent");	
 				if (!isGCODEfile) {
 					SVGcontent = content.toString();
 					content = svg2gcode.svg2gcode(SVGcontent, options, function(percent) {
@@ -341,7 +357,10 @@ io.sockets.on('connection', function (socket) {
 			sendLCDMessage("It's running ^^!Yeah, so cool.");
 	});
 	socket.on('requestQueue', function() {
-		sendQueue(socket);
+		if (!canSendImage)
+			sendQueue(socket);
+		else
+			sendImage(socket);		
 	});
 	socket.on('pause', function() {
 		pause();
@@ -365,6 +384,10 @@ io.sockets.on('connection', function (socket) {
 		cmd = cmd || "";
 		cmd = phpjs.str_replace(['"', "'"], '', cmd);
 		write2serial(cmd);
+	});
+	socket.on('resolution', function(resolution) {
+		argv.resolution = resolution;
+		io.sockets.emit("settings", argv);
 	});
 	socket.on('feedRate', function(feedRate) {
 		feedRate = phpjs.intval(feedRate);
@@ -433,7 +456,18 @@ if (argv.feedRate == -1)
 		}
 	});
 
-
+function sendImage(socket, filepath) {
+	if (filepath)
+		imagePath = filepath;
+	var __sendQueue = gcodeDataQueue.length < 22696;
+	if (__sendQueue)
+		sendQueue();
+	var queueLength = gcodeDataQueue.length;
+	if (socket)
+		socket.emit("sendImage", imagePath, __sendQueue, queueLength);
+	else
+		io.sockets.emit("sendImage", imagePath, __sendQueue, queueLength);
+}
 
 function sendQueue(socket) {
 	socket = socket || io.sockets;
@@ -473,6 +507,9 @@ function stop(sendPush) {
 	currentDistance = 0;
 	stopCountingTime();
 	console.log('stop!');
+	setTimeout(function() {
+		write2serial("~");
+	}, 400);
 	if (sendPush)
 		sendPushNotification("The machine was stopped");
 }
@@ -588,9 +625,8 @@ function sendFirstGCodeLine() {
 }
 
 function sendGcodeFromQueue() {
-	if ((currentDistance < maxDistance || currentQueue < minQueue) && currentQueue < maxQueue) {
+	if ((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue)
 		sendFirstGCodeLine();
-	}
 }
 
 function receiveData(data) {
