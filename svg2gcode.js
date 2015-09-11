@@ -37,10 +37,10 @@ var	express		=	require('express'),
 	argv.serverPort		=	argv.serverPort		|| 9090;						//kLaserCutter Server nodejs port
 	argv.minDistance	=	argv.minDistance	|| 6;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
 	argv.maxDistance	=	argv.maxDistance	|| 8;							//queue is full if the distance they went enough 8mm or more one comand
-	argv.minQueue		=	argv.minQueue		|| 7;							//queue has at least 5 elements
+	argv.minQueue		=	argv.minQueue		|| 8;							//queue has at least 5 elements
 	argv.maxQueue		=	argv.maxQueue		|| 20;							//queue has at maximum 20 elements
 	argv.minCPUTemp		=	argv.minCPUTemp		|| 73;							// if galileo temp <= this => turn the fan off
-	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 88;							// if galileo temp > this => turn the fan on
+	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 85;							// if galileo temp > this => turn the fan on
 	argv.maxCoorX		=	argv.maxCoorX		|| 320;							// your max X coordinate 
 	argv.maxCoorY		=	argv.maxCoorY		|| 315;							// your max Y coordinate
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
@@ -611,7 +611,7 @@ function sendFirstGCodeLine() {
 	//if command is just a command, we check again
 	if (phpjs.strlen(command) <= 1 || command.indexOf(";") == 0)   //igrone comment line
 		return sendFirstGCodeLine();
-	command = phpjs.trim(command.replace(/[^a-zA-Z0-9-.$]/g, ''));
+	command = phpjs.trim(command.replace(/[^a-zA-Z0-9-.$ ]/g, ''));
 	//write command to grbl
 	write2serial(command);
 	
@@ -633,13 +633,18 @@ function sendFirstGCodeLine() {
 	return true;
 }
 
+var __sendGcodeCheckPoint = true;
 function sendGcodeFromQueue() {
-	if ((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue)
+	if (((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue) && __sendGcodeCheckPoint) {
+		__sendGcodeCheckPoint = false;
 		sendFirstGCodeLine();
+		__sendGcodeCheckPoint = true;
+	}
 }
 
 function receiveData(data) {
 	if (data.indexOf('<') == 0) {	//type <status,...>
+		//console.log(data);
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
 		laserPos.set(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
@@ -647,7 +652,10 @@ function receiveData(data) {
 		
 		io.sockets.emit('position', data_array, machineRunning, machinePause, copiesDrawing);
 		//console.log(currentQueue + " " + laserPos.distance(goalPos) + " " + minDistance);
-		if ((laserPos.distance(goalPos) < minDistance) || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
+		var __minDistance = minDistance;
+		if (canSendImage)
+			__minDistance <<= 8; //*2^8
+		if ((laserPos.distance(goalPos) < __minDistance) || (data_array[0] == 'Idle' && gcodeQueue.length > 0)) {
 			currentQueue = 0;
 			currentDistance = 0;
 			
@@ -674,8 +682,8 @@ function receiveData(data) {
 			sendGcodeFromQueue();
 	} else if (data.indexOf('error') > -1) {
 		currentQueue--;
-		if (data.indexOf(':24') == -1)
-			io.sockets.emit('error', {id: 2, message: data});
+		console.log(data);
+		io.sockets.emit('error', {id: 2, message: data});
 	} else {
 		io.sockets.emit('data', data);
 	}
@@ -702,19 +710,40 @@ function saveRememberDevice(list) {
 	list = list || rememberTokenDevice;
 	fs.writeFile('./data/rememberDevice.json', JSON.stringify(list));
 }
+
+var __serial_free = true;
+var __serial_queue = [];
+function __write2serial() {
+	if (!__serial_free) return;
+	__serial_free = false;
+	var ele = __serial_queue.shift();
+	var command = ele.command;
+	var func	= ele.func;
+	serialPort.write("\r" + command, function (e, d) {
+		serialPort.drain();
+		if (func)
+			func(e, d);
+		sleep.usleep(50000);
+		__serial_free = true;
+		if (__serial_free && __serial_queue.length > 0)
+			__write2serial();
+	});
+}
+
 function write2serial(command, func) {
+	
 	if (relay && !relay.isOn && command.length > 1) {
 		relay.on();
 		sleep.sleep(1); //sleep 1 s
 	}
-	//console.log(command);
-	if (func) {
-		serialPort.write(command, func);
-		serialPort.write("\n");
-	} else {
-		serialPort.write(command);
-		serialPort.write("\n");
-	}
+	command = command + "\n";
+	//add command to serial queue
+	__serial_queue.push({
+		'command'	: command,
+		'func'		: func
+	});
+	if (__serial_free)
+		__write2serial();
 }
 
 serialPort.on("open", function (error) {
