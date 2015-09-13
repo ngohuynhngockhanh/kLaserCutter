@@ -35,17 +35,18 @@ var	express		=	require('express'),
 
 //argv
 	argv.serverPort		=	argv.serverPort		|| 9090;						//kLaserCutter Server nodejs port
-	argv.minDistance	=	argv.minDistance	|| 6;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
-	argv.maxDistance	=	argv.maxDistance	|| 8;							//queue is full if the distance they went enough 8mm or more one comand
-	argv.minQueue		=	argv.minQueue		|| 8;							//queue has at least 5 elements
-	argv.maxQueue		=	argv.maxQueue		|| 20;							//queue has at maximum 20 elements
+	argv.minDistance	=	argv.minDistance	|| 25;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
+	argv.maxDistance	=	argv.maxDistance	|| 50;							//queue is full if the distance they went enough 8mm or more one comand
+	argv.minQueue		=	argv.minQueue		|| 10;							//queue has at least 5 elements
+	argv.maxQueue		=	argv.maxQueue		|| 30;							//queue has at maximum 20 elements
+	argv.maxLengthCmd	=	argv.maxLengthCmd	|| 127;							//maxLength of batch process, in grbl wiki, it is 127
 	argv.minCPUTemp		=	argv.minCPUTemp		|| 73;							// if galileo temp <= this => turn the fan off
 	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 85;							// if galileo temp > this => turn the fan on
 	argv.maxCoorX		=	argv.maxCoorX		|| 320;							// your max X coordinate 
 	argv.maxCoorY		=	argv.maxCoorY		|| 315;							// your max Y coordinate
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
 	argv.intervalTime2	=	argv.intervalTime2	|| 10000;						//10s = 10000ms. Each 10s, we check camera status once
-	argv.intervalTime3	= 	argv.intervalTime3	|| 700;							//check current laser after 600ms
+	argv.intervalTime3	= 	argv.intervalTime3	|| 1000;						//check current laser after 1000ms
 	argv.intervalTime4	=	argv.intervalTime4	|| 30000;						//30s = 30000ms. Each 30s, we check server load once
 	argv.intervalTime5	=	argv.intervalTime5	|| 60;							//60s. Each 1 minute, we check grbl status to change to power saving mode
 	argv.intervalTime6	=	argv.intervalTime6	|| 10000;						//10s. Each 10 seconds, we update Server log/ Galileo temperature OR Laser position once.
@@ -118,6 +119,11 @@ var	gcodeQueue	= 	[],
 	redButton;
 
 
+var __serial_free	= true;
+var __sent_count	= 0; 
+var __sent_count_direct = 0;
+var __serial_queue	= [];
+var __preProcessQueue = {command: ""};
 var _getIpAddress_idx = 0;
 function getIpAddress() {
 	var ip = sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout;	
@@ -493,6 +499,20 @@ function sendSVG(content, socket) {
 	socket.emit('sendSVG', content);
 }
 
+var __finishSentInterval;
+function finishSent() {
+	if (__finishSentInterval == undefined) {
+		console.log("finish 'Sent gcode process'");
+		__finishSentInterval = setInterval(function() {
+			if (__sent_count == 0) {
+				clearInterval(__finishSentInterval);				
+				finish();
+				__finishSentInterval = undefined;
+			}
+		}, 50);
+	}
+}
+
 function finish() {
 	console.log('finish');
 	io.sockets.emit('finish');
@@ -503,9 +523,12 @@ function finish() {
 }
 
 function stop(sendPush) {
-	write2serial("~");
-	write2serial("M5");
-	write2serial("g0x0y0");
+	__serial_queue = [];
+	__sent_count = 0;
+	__preProcessQueue.command = "";
+	write2serial_direct("~\n");
+	write2serial_direct("M5\n");
+	write2serial_direct("g0x0y0\n");
 	goalPos.set(0, 0);
 	sendPush = (sendPush != undefined) ? sendPush : true;
 	machineRunning	= false;
@@ -545,19 +568,19 @@ function start(copies) {
 	copiesDrawing = copies;
 	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
 		gcodeQueue = gcodeDataQueue.slice(0);
-	write2serial("~");
+	write2serial_direct("~\n");
 	sendPushNotification("The machine has just been started!");
 }
 
 function pause() {
 	machinePause = true;
-	write2serial("!");
+	write2serial_direct("!\n");
 	console.log("pause");
 }
 
 function unpause() {
 	machinePause = false;
-	write2serial("~");
+	write2serial_direct("~\n");
 	console.log("unpause");
 }
 
@@ -580,7 +603,7 @@ function sendCommand(command) {
 	else {
 		command = phpjs.strval(command);
 		console.log("send command " + command);
-		write2serial((command));
+		write2serial(command);
 	}
 }
 
@@ -593,7 +616,7 @@ function getPosFromCommand(which, command) {
 function sendFirstGCodeLine() {
 	if (gcodeQueue.length == 0) {	// is empty list
 		if (copiesDrawing <= 1) {
-			finish();
+			finishSent();
 			return false;
 		} else {
 			gcodeQueue = gcodeDataQueue.slice(0);
@@ -613,13 +636,16 @@ function sendFirstGCodeLine() {
 		return sendFirstGCodeLine();
 	command = phpjs.trim(command.replace(/[^a-zA-Z0-9-.$ ]/g, ''));
 	//write command to grbl
-	write2serial(command);
+	
 	
 	//convert command to upper style
 	command = phpjs.strtoupper(command);
 	
 	// send gcode command to client
 	io.sockets.emit("gcode", {command: command, length: gcodeQueue.length}, timer2);
+	
+	command = phpjs.str_replace(" ", "", command);
+	write2serial(command);
 	
 	//get X and Y position from the command to count the length that the machine has run
 	var commandX = getPosFromCommand('X', command);
@@ -633,16 +659,13 @@ function sendFirstGCodeLine() {
 	return true;
 }
 
-var __sendGcodeCheckPoint = true;
 function sendGcodeFromQueue() {
-	if (((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue) && __sendGcodeCheckPoint) {
-		__sendGcodeCheckPoint = false;
+	if ((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue && __serial_queue.length < maxQueue)
 		sendFirstGCodeLine();
-		__sendGcodeCheckPoint = true;
-	}
 }
 
 function receiveData(data) {
+	//console.log(data);
 	if (data.indexOf('<') == 0) {	//type <status,...>
 		//console.log(data);
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "", "\n"], '', data);
@@ -659,12 +682,10 @@ function receiveData(data) {
 			currentQueue = 0;
 			currentDistance = 0;
 			
-			if (data_array[0] == 'Idle' && is_running()) 
-				sendGcodeFromQueue();
 		} 
+		
 		if (!machinePause && data_array[0] == 'Hold') {
 			unpause();
-			sendGcodeFromQueue();
 		}
 		if (phpjs.time() - timer3 > intervalTime5) {
 			if (relay) {
@@ -677,17 +698,34 @@ function receiveData(data) {
 			timer3 = phpjs.time();
 		}
 	} else if (data.indexOf('ok') == 0) {
+		
+			
+		if (__sent_count_direct > 0)
+			__sent_count_direct--;
+		else
+			__sent_count--;
+			
+		if (__sent_count > 0 && __sent_count < 6)
+			if (__preProcessQueue.command == "") 
+				__preProcessQueue = __preProcessWrite2Serial();
+		//console.log(__sent_count + " " + __sent_count_direct);
 		timer1 = phpjs.time();
-		if (is_running())
+		if (is_running()) {
 			sendGcodeFromQueue();
+		}
 	} else if (data.indexOf('error') > -1) {
+		__sent_count--;
 		currentQueue--;
 		console.log(data);
 		io.sockets.emit('error', {id: 2, message: data});
 	} else {
 		io.sockets.emit('data', data);
 	}
-		
+	
+	if (__sent_count == 0) {
+		__serial_free = true;
+		__write2serial();
+	}
 }
 
 function addQueue(list) {
@@ -711,39 +749,89 @@ function saveRememberDevice(list) {
 	fs.writeFile('./data/rememberDevice.json', JSON.stringify(list));
 }
 
-var __serial_free = true;
-var __serial_queue = [];
-function __write2serial() {
-	if (!__serial_free) return;
-	__serial_free = false;
-	var ele = __serial_queue.shift();
-	var command = ele.command;
-	var func	= ele.func;
-	serialPort.write("\r" + command, function (e, d) {
-		serialPort.drain();
-		if (func)
-			func(e, d);
-		sleep.usleep(50000);
-		__serial_free = true;
-		if (__serial_free && __serial_queue.length > 0)
-			__write2serial();
-	});
+function __preProcessWrite2Serial() {
+	var command = [];
+	var func;
+	var i = 0;
+	var length = 0;
+	
+	do {
+		//process check serial queue is not empty
+		if (__serial_queue.length == 0)
+			break;
+		
+		//check the length of command batch
+		if (length + phpjs.strlen(__serial_queue[0].command) > argv.maxLengthCmd)
+			break;
+			
+		//add command to batch
+		var ele = __serial_queue.shift();
+		command.push(ele.command);
+		length += phpjs.strlen(ele.command);
+		func	= ele.func;
+		i++;
+	} while (!func);
+	
+	command = command.join('');
+	
+	return {
+		sent_count: i,
+		command		: command,
+		length		: length,
+		func		: func
+	};
 }
 
-function write2serial(command, func) {
+
+
+function __write2serial(free) {
+	if ((!__serial_free && free != true) || __serial_queue.length == 0) return;
+	__serial_free = false;
 	
+	if (__preProcessQueue.command == "") 
+		__preProcessQueue = __preProcessWrite2Serial();
+		
+	
+	__sent_count = __preProcessQueue.sent_count;
+	var length = __preProcessQueue.length;
+	var func = __preProcessQueue.func;
+	var command = __preProcessQueue.command;
+	
+	//console.log("Send " + __sent_count + " with length " + length + " ; con " + __serial_queue.length );
+	
+	__preProcessQueue.command = "";
+	//console.log(command);
+	
+	serialPort.write(command, function (e, d) {
+		serialPort.drain(function() {
+			if (func)
+				func(e, d);
+		});
+			
+	});
+}
+var __lastCommand = "";
+function write2serial(command, func) {
 	if (relay && !relay.isOn && command.length > 1) {
 		relay.on();
 		sleep.sleep(1); //sleep 1 s
 	}
-	command = command + "\n";
-	//add command to serial queue
-	__serial_queue.push({
-		'command'	: command,
-		'func'		: func
-	});
-	if (__serial_free)
-		__write2serial();
+	
+	if (__lastCommand != command || phpjs.length(command) < 5) {
+		//add command to serial queue		
+		__serial_queue.push({
+			'command'	: command + "\n",
+			'func'		: func
+		});
+		
+		if (__serial_free)
+			__write2serial();
+	}
+}
+
+function write2serial_direct(command) {
+	__sent_count_direct++;
+	serialPort.write(command);
 }
 
 serialPort.on("open", function (error) {
@@ -753,10 +841,8 @@ serialPort.on("open", function (error) {
 	} else {
 		console.log('open serial port');
 		var interval = setInterval(function() {
-			write2serial("?", function (e) {
-				if (e != undefined)
-					io.sockets.emit('error');
-			});
+			serialPort.write("?");
+			
 		}, intervalTime3);
 		serialPort.on('data', function(data) {
 			 receiveData(data);
@@ -765,7 +851,7 @@ serialPort.on("open", function (error) {
 });
 
 var AT_interval1 = setInterval(function() {
-	write2serial("?");
+	write2serial("?");	
 	if (is_running() && phpjs.time() - timer1 > intervalTime1) 
 		io.sockets.emit("error", {id: 0, message: 'Long time to wait ok response'});
 }, intervalTime1);
