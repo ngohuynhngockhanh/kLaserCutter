@@ -35,8 +35,8 @@ var	express		=	require('express'),
 
 //argv
 	argv.serverPort		=	argv.serverPort		|| 9090;						//kLaserCutter Server nodejs port
-	argv.minDistance	=	argv.minDistance	|| 25;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
-	argv.maxDistance	=	argv.maxDistance	|| 50;							//queue is full if the distance they went enough 8mm or more one comand
+	argv.minDistance	=	argv.minDistance	|| 50;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
+	argv.maxDistance	=	argv.maxDistance	|| 100;							//queue is full if the distance they went enough 8mm or more one comand
 	argv.minQueue		=	argv.minQueue		|| 10;							//queue has at least 5 elements
 	argv.maxQueue		=	argv.maxQueue		|| 30;							//queue has at maximum 20 elements
 	argv.maxLengthCmd	=	argv.maxLengthCmd	|| 127;							//maxLength of batch process, in grbl wiki, it is 127
@@ -689,7 +689,7 @@ function receiveData(data) {
 		}
 		if (phpjs.time() - timer3 > intervalTime5) {
 			if (relay) {
-				if (data_array[0] == 'Idle')
+				if (data_array[0] == 'Idle' && !is_running())
 					relay.off();
 				else 
 					relay.on();
@@ -698,16 +698,13 @@ function receiveData(data) {
 			timer3 = phpjs.time();
 		}
 	} else if (data.indexOf('ok') == 0) {
-		
-			
 		if (__sent_count_direct > 0)
 			__sent_count_direct--;
 		else
 			__sent_count--;
 			
-		if (__sent_count > 0 && __sent_count < 6)
-			if (__preProcessQueue.command == "") 
-				__preProcessQueue = __preProcessWrite2Serial();
+		if (__preProcessQueue.command == "") 
+			__preProcessQueue = __preProcessWrite2Serial();
 		//console.log(__sent_count + " " + __sent_count_direct);
 		timer1 = phpjs.time();
 		if (is_running()) {
@@ -817,7 +814,7 @@ function write2serial(command, func) {
 		sleep.sleep(1); //sleep 1 s
 	}
 	
-	if (__lastCommand != command || phpjs.length(command) < 5) {
+	if (__lastCommand != command || phpjs.strlen(command) < 5) {
 		//add command to serial queue		
 		__serial_queue.push({
 			'command'	: command + "\n",
@@ -841,8 +838,12 @@ serialPort.on("open", function (error) {
 	} else {
 		console.log('open serial port');
 		var interval = setInterval(function() {
-			serialPort.write("?");
-			
+			//increase the max element in the queue
+			write2serial("");
+			setTimeout(function() {
+				serialPort.write("?");
+			});
+				
 		}, intervalTime3);
 		serialPort.on('data', function(data) {
 			 receiveData(data);
