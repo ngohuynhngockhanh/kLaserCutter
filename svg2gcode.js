@@ -441,8 +441,18 @@ io.sockets.on('connection', function (socket) {
 		if (sendLCDMessage)
 			sendLCDMessage((tokenIndexOf == -1 ? "New" : "Old") + " device (#" + tokenDevice.indexOf(token) + ")");
 	});
+	socket.on('webcamChangeResolution', function(resolution) {
+		var list = mjpg_streamer.getSizeList();
+		var index = list.indexOf(resolution);
+		if (index == -1)
+			resolution = 'auto';
+		console.log(resolution);
+		mjpg_streamer.setResolution(resolution);
+		io.sockets.emit("mjpg_log", mjpg_streamer.tryRun(true)); // try to reset (if we can)
+	});
 	
 	socket.emit("settings", argv);
+	socket.emit("webcamSizeList", mjpg_streamer.getSizeList());
 });
 
 server.listen(argv.serverPort);
