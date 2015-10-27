@@ -1,0 +1,9 @@
+MJPG Streamer Version.: 2.0
+ i: Using V4L2 device.: /dev/video0
+ i: Desired Resolution: 320 x 240
+ i: Frames Per Second.: 5
+ i: Format............: MJPEG
+ o: www-folder-path...: ./www/
+ o: HTTP TCP port.....: 8080
+ o: username:password.: disabled
+ o: commands..........: enabled

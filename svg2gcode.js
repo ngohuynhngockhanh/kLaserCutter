@@ -40,8 +40,8 @@ var	express		=	require('express'),
 	argv.minQueue		=	argv.minQueue		|| 10;							//queue has at least 5 elements
 	argv.maxQueue		=	argv.maxQueue		|| 30;							//queue has at maximum 20 elements
 	argv.maxLengthCmd	=	argv.maxLengthCmd	|| 127;							//maxLength of batch process, in grbl wiki, it is 127
-	argv.minCPUTemp		=	argv.minCPUTemp		|| 73;							// if galileo temp <= this => turn the fan off
-	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 85;							// if galileo temp > this => turn the fan on
+	argv.minCPUTemp		=	argv.minCPUTemp		|| 70;							// if galileo temp <= this => turn the fan off
+	argv.maxCPUTemp		=	argv.maxCPUTemp		|| 80;							// if galileo temp > this => turn the fan on
 	argv.maxCoorX		=	argv.maxCoorX		|| 320;							// your max X coordinate 
 	argv.maxCoorY		=	argv.maxCoorY		|| 315;							// your max Y coordinate
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
@@ -99,7 +99,7 @@ var	gcodeQueue	= 	[],
 	imagePath			=	'',
 	laserPos	=	new Vec2(0, 0),
 	goalPos		=	new Vec2(0, 0),
-	mjpg_streamer=  new MJPG_Streamer(argv.mjpg),
+	mjpg_streamer=  new MJPG_Streamer(false, argv.mjpg),
 	intervalTime1		=	phpjs.intval(argv.intervalTime1),
 	intervalTime2		=	phpjs.intval(argv.intervalTime2),
 	intervalTime3		= 	phpjs.intval(argv.intervalTime3),
