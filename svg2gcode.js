@@ -278,6 +278,7 @@ io.sockets.on('connection', function (socket) {
 	uploader.on("start", function(event) {
 		console.log("upload task starts");
 		pic2gcode.clear();
+		event.file.name = phpjs.str_replace("'", "", event.file.name);
 		var file = event.file;
 		var fileSize = file.size;
 		if (fileSize > argv.maxFileSize) {
@@ -314,7 +315,7 @@ io.sockets.on('connection', function (socket) {
 			var options = argv;			
 			console.log(filepath);
 			if (isPICfile) {
-				var imageSize = phpjs.explode("x", sh.exec('./bin/img_size/img_size ' + filepath).stdout);
+				var imageSize = phpjs.explode("x", sh.exec('./bin/img_size/img_size \'' + filepath + '\'').stdout);
 				var width = phpjs.intval(imageSize[0]) / px2mm;
 				var height = phpjs.intval(imageSize[1]) / px2mm;
 				console.log(width);
