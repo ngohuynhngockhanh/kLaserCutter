@@ -55,6 +55,7 @@ var	express		=	require('express'),
 	argv.ionicAppId		=	argv.ionicAppId 	|| '46a9aa6b';												//ionic app id (ionic app), create your own or use my own
 	argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
 	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
+	argv.maxLaserPower	= 	argv.maxLaserPower	|| 100;
 	argv.resolution		=	argv.resolution		|| px2mm;				//pic2gcode (picture 2 gcode) resolution
 	argv.mjpg			=	(argv.mjpg != undefined) ? JSON.parse(argv.mjpg) : {
 								"port"			:	8080,
@@ -403,6 +404,17 @@ io.sockets.on('connection', function (socket) {
 	});
 	socket.on('resolution', function(resolution) {
 		argv.resolution = resolution;
+		io.sockets.emit("settings", argv);
+	});
+	socket.on('maxLaserPower', function(power) {
+		power = phpjs.intval(power);
+		if (power < 0)
+			power = 0;
+		else if (power > 100)
+			power = 100;
+		
+		argv.maxLaserPower = power;
+		console.log("change laser power to " + power + " %")
 		io.sockets.emit("settings", argv);
 	});
 	socket.on('feedRate', function(feedRate) {
