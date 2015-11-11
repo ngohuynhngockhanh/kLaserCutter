@@ -24,6 +24,9 @@ unzip pptp.zip
 cd pptp* && make 
 make clean && make && make install && cd ..
 rm pptp* -rf
+
+npm install galileo-io
+
 echo ""
 echo ""
 echo ""
