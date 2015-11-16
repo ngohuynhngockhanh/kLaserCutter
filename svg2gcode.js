@@ -46,7 +46,7 @@ var	express		=	require('express'),
 	argv.maxCoorY		=	argv.maxCoorY		|| 315;							// your max Y coordinate
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
 	argv.intervalTime2	=	argv.intervalTime2	|| 10000;						//10s = 10000ms. Each 10s, we check camera status once
-	argv.intervalTime3	= 	argv.intervalTime3	|| 1000;						//check current laser after 1000ms
+	argv.intervalTime3	= 	argv.intervalTime3	|| 610;						//check current laser after 610ms
 	argv.intervalTime4	=	argv.intervalTime4	|| 30000;						//30s = 30000ms. Each 30s, we check server load once
 	argv.intervalTime5	=	argv.intervalTime5	|| 60;							//60s. Each 1 minute, we check grbl status to change to power saving mode
 	argv.intervalTime6	=	argv.intervalTime6	|| 10000;						//10s. Each 10 seconds, we update Server log/ Galileo temperature OR Laser position once.
