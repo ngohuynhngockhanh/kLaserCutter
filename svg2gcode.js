@@ -30,7 +30,8 @@ var	express		=	require('express'),
 	serialPort	= 	new SerialPort("/dev/ttyS0", {
 					baudrate: 115200,
 					parser: serialport.parsers.readline("\n")
-				});
+				}),
+	Deque 		= 	require("double-ended-queue");
 
 
 //argv
@@ -69,7 +70,7 @@ var	express		=	require('express'),
 console.log("MJPG options: ");
 console.log(argv.mjpg);
 				
-var	gcodeQueue	= 	[],
+var	gcodeQueue	= 	new Deque([]),
 	gcodeDataQueue= [],
 	tokenDevice	=	[],
 	rememberTokenDevice = [],
@@ -557,7 +558,7 @@ function stop(sendPush) {
 	machineRunning	= false;
 	machinePause	= true;
 	timer2			= 0;
-	gcodeQueue 		= gcodeDataQueue.slice(0);
+	gcodeQueue 		= new Deque(gcodeDataQueue.slice(0));
 	currentQueue 	= 0;
 	currentDistance = 0;
 	stopCountingTime();
@@ -589,8 +590,8 @@ function start(copies) {
 	if (copies <= 1)
 		copies = 1;
 	copiesDrawing = copies;
-	if (gcodeQueue.length == 0 && gcodeDataQueue.length > 0)
-		gcodeQueue = gcodeDataQueue.slice(0);
+	if (gcodeQueue.isEmpty() && gcodeDataQueue.length > 0)
+		gcodeQueue = new Deque(gcodeDataQueue.slice(0));
 	write2serial_direct("~\n");
 	sendPushNotification("The machine has just been started!");
 }
@@ -637,12 +638,12 @@ function getPosFromCommand(which, command) {
 	return phpjs.floatval(tmp[1]);
 }
 function sendFirstGCodeLine() {
-	if (gcodeQueue.length == 0) {	// is empty list
+	if (gcodeQueue.isEmpty()) {	// is empty list
 		if (copiesDrawing <= 1) {
 			finishSent();
 			return false;
 		} else {
-			gcodeQueue = gcodeDataQueue.slice(0);
+			gcodeQueue = new Deque(gcodeDataQueue.slice(0));
 			copiesDrawing--;
 		}
 	}
@@ -761,7 +762,7 @@ function addQueue(list) {
 	}
 	
 	//new queue
-	gcodeQueue = list;
+	gcodeQueue = new Deque(list);
 	gcodeDataQueue = list.slice(0);
 }
 function saveRememberDevice(list) {
