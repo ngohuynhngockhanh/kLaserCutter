@@ -787,8 +787,6 @@ function __preProcessWrite2Serial() {
 			
 		//add command to batch
 		var ele = __serial_queue.shift();
-		if (ele.command.length <= 1)
-			continue;
 		command.push(ele.command);
 		length += phpjs.strlen(ele.command);
 		func	= ele.func;
@@ -826,7 +824,7 @@ function __write2serial(free) {
 	__preProcessQueue.command = "";
 	//console.log(command);
 	
-	if (length > 0)
+	
 	serialPort.write(command, function (e, d) {
 		serialPort.drain(function() {
 			if (func)
