@@ -593,8 +593,8 @@ function start(copies) {
 	if (copies <= 1)
 		copies = 1;
 	copiesDrawing = copies;
-	if (gcodeQueue.isEmpty() && !gcodeDataQueue.isEmpty())
-		gcodeQueue = new Deque(gcodeDataQueue);
+	if (gcodeQueue.isEmpty() && gcodeDataQueue.length > 0)
+		gcodeQueue = new Deque(gcodeDataQueue.toArray());
 	write2serial_direct("~\n");
 	sendPushNotification("The machine has just been started!");
 }
@@ -646,7 +646,7 @@ function sendFirstGCodeLine() {
 			finishSent();
 			return false;
 		} else {
-			gcodeQueue = new Deque(gcodeDataQueue);
+			gcodeQueue = new Deque(gcodeDataQueue.toArray());
 			copiesDrawing--;
 		}
 	}
