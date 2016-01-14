@@ -71,7 +71,7 @@ console.log("MJPG options: ");
 console.log(argv.mjpg);
 				
 var	gcodeQueue	= 	new Deque([]),
-	gcodeDataQueue= [],
+	gcodeDataQueue= new Deque([]),
 	tokenDevice	=	[],
 	rememberTokenDevice = [],
 	SVGcontent	=	"",
@@ -436,7 +436,10 @@ io.sockets.on('connection', function (socket) {
 		replaceFeedRate(gcodeQueue);
 		replaceFeedRate(gcodeDataQueue);
 		argv.feedRate = feedRate;
+		if (argv.feedRate == 1)
+			argv.feedRate = 50;
 		io.sockets.emit("settings", argv);
+		
 	});
 	socket.on('token', function(token, remember) {
 		tokenIndexOf = tokenDevice.indexOf(token);
@@ -558,7 +561,7 @@ function stop(sendPush) {
 	machineRunning	= false;
 	machinePause	= true;
 	timer2			= 0;
-	gcodeQueue 		= new Deque(gcodeDataQueue.slice(0));
+	gcodeQueue 		= new Deque(gcodeDataQueue);
 	currentQueue 	= 0;
 	currentDistance = 0;
 	stopCountingTime();
@@ -590,8 +593,8 @@ function start(copies) {
 	if (copies <= 1)
 		copies = 1;
 	copiesDrawing = copies;
-	if (gcodeQueue.isEmpty() && gcodeDataQueue.length > 0)
-		gcodeQueue = new Deque(gcodeDataQueue.slice(0));
+	if (gcodeQueue.isEmpty() && !gcodeDataQueue.isEmpty())
+		gcodeQueue = new Deque(gcodeDataQueue);
 	write2serial_direct("~\n");
 	sendPushNotification("The machine has just been started!");
 }
@@ -643,7 +646,7 @@ function sendFirstGCodeLine() {
 			finishSent();
 			return false;
 		} else {
-			gcodeQueue = new Deque(gcodeDataQueue.slice(0));
+			gcodeQueue = new Deque(gcodeDataQueue);
 			copiesDrawing--;
 		}
 	}
@@ -763,7 +766,7 @@ function addQueue(list) {
 	
 	//new queue
 	gcodeQueue = new Deque(list);
-	gcodeDataQueue = list.slice(0);
+	gcodeDataQueue = new Deque(list);
 }
 function saveRememberDevice(list) {
 	list = list || rememberTokenDevice;
